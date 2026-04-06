@@ -1,0 +1,17 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":enablePreCommit"],
+  "enabledManagers": [
+    "pep621",
+    "pre-commit",
+    "dockerfile",
+    "docker-compose",
+    "gitlabci",
+    "gitlabci-include"
+  ],
+  "automerge": true,
+  "automergeType": "pr",
+  "major": {
+    "automerge": false
+  }
+}

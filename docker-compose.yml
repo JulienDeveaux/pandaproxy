@@ -20,6 +20,6 @@ networks:
       parent: eth0 # Change this to your physical interface name (e.g., eth0, eno1)
     ipam:
       config:
-        - subnet: 192.168.1.0/24   # Match your physical network
-          gateway: 192.168.1.1     # Match your gateway
+        - subnet: 192.168.1.0/24 # Match your physical network
+          gateway: 192.168.1.1 # Match your gateway
           ip_range: 192.168.1.192/27 # Optional: restricted range for docker containers

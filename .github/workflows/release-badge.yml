@@ -3,7 +3,7 @@ name: Update Release Badge
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 jobs:
   update-badge:
