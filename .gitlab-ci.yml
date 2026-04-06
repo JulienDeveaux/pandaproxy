@@ -6,3 +6,4 @@ include:
       - /templates/test.yml
       - /templates/docker.yml
       - /templates/pr-agent.yml
+      - /templates/release-badge.yml
