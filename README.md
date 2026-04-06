@@ -18,6 +18,7 @@ The RTSPS camera proxy feature is **completely untested** as I only own a P1S pr
 ### Contributing
 
 Contributions are very welcome! Whether it's:
+
 - **Pull requests** with bug fixes or new features
 - **Issues** reporting bugs (especially with test cases!)
 - **Testing** on printer models I don't have access to
@@ -27,12 +28,14 @@ Please don't hesitate to open an issue or PR on GitHub.
 ## Overview
 
 BambuLab printers in LAN Mode with Development Mode enabled expose several services:
+
 - **Camera (RTSPS)** on port 322 - X1, X1C, X1E, H2C, H2D, H2D Pro, H2S, P2S
 - **Camera (Chamber Image)** on port 6000 - A1, A1 Mini, P1P, P1S
 - **MQTT** on port 8883 (MQTTS) - Printer control and status for all models
 - **FTP** on port 990 (implicit FTPS) - File uploads (gcode, 3mf) for all models
 
 These services have limited simultaneous connection support. PandaProxy acts as a transparent man-in-the-middle proxy that:
+
 1. **Automatically detects** the camera protocol used by your printer
 2. Maintains connections to the printer's services
 3. Serves **multiple clients** using the same protocols
@@ -108,15 +111,15 @@ pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 -v
 
 ### CLI Options
 
-| Option             | Short | Environment Variable | Description                                      |
-|--------------------|-------|----------------------|--------------------------------------------------|
-| `--printer-ip`     | `-p`  | `PRINTER_IP`         | IP address of the BambuLab printer               |
-| `--access-code`    | `-a`  | `ACCESS_CODE`        | Access code (found in printer settings)          |
-| `--serial-number`  | `-s`  | `SERIAL_NUMBER`      | Printer serial number                            |
-| `--bind`           | `-b`  | `BIND_ADDRESS`       | Address to bind proxy servers (default: 0.0.0.0) |
-| `--services`       |       | `SERVICES`           | Comma-separated services: camera,mqtt,ftp        |
-| `--enable-all`     |       | `ENABLE_ALL`         | Enable all services                              |
-| `--verbose`        | `-v`  |                      | Enable debug logging                             |
+| Option            | Short | Environment Variable | Description                                      |
+| ----------------- | ----- | -------------------- | ------------------------------------------------ |
+| `--printer-ip`    | `-p`  | `PRINTER_IP`         | IP address of the BambuLab printer               |
+| `--access-code`   | `-a`  | `ACCESS_CODE`        | Access code (found in printer settings)          |
+| `--serial-number` | `-s`  | `SERIAL_NUMBER`      | Printer serial number                            |
+| `--bind`          | `-b`  | `BIND_ADDRESS`       | Address to bind proxy servers (default: 0.0.0.0) |
+| `--services`      |       | `SERVICES`           | Comma-separated services: camera,mqtt,ftp        |
+| `--enable-all`    |       | `ENABLE_ALL`         | Enable all services                              |
+| `--verbose`       | `-v`  |                      | Enable debug logging                             |
 
 ### Environment Variables
 
@@ -180,6 +183,7 @@ rtsps://bblp:<access_code>@<proxy-ip>:322/stream
 ```
 
 Example with VLC:
+
 ```bash
 vlc rtsps://bblp:12345678@192.168.1.50:322/stream
 ```
@@ -187,10 +191,12 @@ vlc rtsps://bblp:12345678@192.168.1.50:322/stream
 ### MQTT (All printers)
 
 Connect to `<proxy-ip>:8883` using MQTTS (MQTT over TLS):
+
 - Username: `bblp`
 - Password: Your access code
 
 Example with mosquitto_sub:
+
 ```bash
 mosquitto_sub -h 192.168.1.50 -p 8883 \
   --cafile /path/to/ca.crt --insecure \
@@ -201,10 +207,12 @@ mosquitto_sub -h 192.168.1.50 -p 8883 \
 ### FTP (All printers)
 
 Connect to `<proxy-ip>:990` using implicit FTPS:
+
 - Username: `bblp`
 - Password: Your access code
 
 Example with lftp:
+
 ```bash
 lftp -u bblp,12345678 ftps://192.168.1.50:990
 ```
@@ -240,17 +248,17 @@ lftp -u bblp,12345678 ftps://192.168.1.50:990
 
 ## Service Ports
 
-| Service           | Printer Port | Proxy Port  | Protocol      |
-|-------------------|--------------|-------------|---------------|
-| Camera (X1/H2/P2) | 322          | 322         | RTSPS         |
-| Camera (A1/P1)    | 6000         | 6000        | TLS Binary    |
-| MQTT              | 8883         | 8883        | MQTTS         |
-| FTP Control       | 990          | 990         | Implicit FTPS |
+| Service           | Printer Port | Proxy Port | Protocol      |
+| ----------------- | ------------ | ---------- | ------------- |
+| Camera (X1/H2/P2) | 322          | 322        | RTSPS         |
+| Camera (A1/P1)    | 6000         | 6000       | TLS Binary    |
+| MQTT              | 8883         | 8883       | MQTTS         |
+| FTP Control       | 990          | 990        | Implicit FTPS |
 
 ## Printer Model Support
 
 | Model                  | Camera          | MQTT | FTP |
-|------------------------|-----------------|------|-----|
+| ---------------------- | --------------- | ---- | --- |
 | X1, X1C, X1E           | RTSPS (:322)    | ✓    | ✓   |
 | H2C, H2D, H2D Pro, H2S | RTSPS (:322)    | ✓    | ✓   |
 | P2S                    | RTSPS (:322)    | ✓    | ✓   |

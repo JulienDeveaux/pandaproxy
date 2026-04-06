@@ -1,0 +1,8 @@
+include:
+  - project: nerdycraft/shared-ci
+    ref: main
+    file:
+      - /templates/lint.yml
+      - /templates/test.yml
+      - /templates/docker.yml
+      - /templates/pr-agent.yml
