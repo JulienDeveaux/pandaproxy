@@ -259,9 +259,7 @@ class MQTTProxy:
     # Client connection handling
     # ------------------------------------------------------------------
 
-    async def _handle_client(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle a new MQTT client connection."""
         peer = writer.get_extra_info("peername")
         logger.info("New MQTT connection from %s", peer)
@@ -298,9 +296,7 @@ class MQTTProxy:
             if not self._upstream_connected.is_set():
                 logger.info("Waiting for upstream connection for %s...", peer)
                 try:
-                    await asyncio.wait_for(
-                        self._upstream_connected.wait(), timeout=UPSTREAM_WAIT_TIMEOUT
-                    )
+                    await asyncio.wait_for(self._upstream_connected.wait(), timeout=UPSTREAM_WAIT_TIMEOUT)
                 except TimeoutError:
                     logger.warning("Upstream not available for %s, disconnecting", peer)
                     return
@@ -313,13 +309,9 @@ class MQTTProxy:
             # --- Run bidirectional forwarding ---
             keepalive = connect_info.keepalive
             send_task = asyncio.create_task(self._client_send_loop(client_id, queue, writer))
-            recv_task = asyncio.create_task(
-                self._client_recv_loop(client_id, reader, writer, keepalive)
-            )
+            recv_task = asyncio.create_task(self._client_recv_loop(client_id, reader, writer, keepalive))
 
-            done, pending = await asyncio.wait(
-                [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending = await asyncio.wait([send_task, recv_task], return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)

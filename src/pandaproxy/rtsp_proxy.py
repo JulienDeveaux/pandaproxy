@@ -312,9 +312,7 @@ class RTSPProxy:
             try:
                 # Check MediaMTX
                 if self._mediamtx_process and self._mediamtx_process.returncode is not None:
-                    logger.warning(
-                        "MediaMTX process exited with code %d", self._mediamtx_process.returncode
-                    )
+                    logger.warning("MediaMTX process exited with code %d", self._mediamtx_process.returncode)
                     if self._running:
                         logger.info("Restarting MediaMTX...")
                         await self._start_mediamtx()
@@ -322,9 +320,7 @@ class RTSPProxy:
 
                 # Check FFmpeg
                 if self._ffmpeg_process and self._ffmpeg_process.returncode is not None:
-                    logger.warning(
-                        "FFmpeg process exited with code %d", self._ffmpeg_process.returncode
-                    )
+                    logger.warning("FFmpeg process exited with code %d", self._ffmpeg_process.returncode)
                     if self._running:
                         logger.info("Restarting FFmpeg in 5 seconds...")
                         await asyncio.sleep(5)

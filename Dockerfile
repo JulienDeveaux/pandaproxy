@@ -1,35 +1,37 @@
-# PandaProxy - BambuLab Camera Fan-Out Proxy
-# Multi-stage build for minimal image size
+# syntax=docker/dockerfile:1
+FROM docker.io/library/python:3.14-alpine AS base
 
-FROM docker.io/python:3.14-alpine AS builder
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONFAULTHANDLER=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:$PATH"
 
-# Version from git tag (passed via --build-arg)
+
+FROM base AS builder
+
 ARG VERSION=0.0.0-dev
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION}
 
-# Install build dependencies
+WORKDIR /app
+
 RUN apk add --no-cache \
     gcc \
     musl-dev \
     libffi-dev
 
-# Install uv for faster package installation
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
-
-# Set working directory
-WORKDIR /app
-
-# Copy project files
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock ./
 COPY src/ src/
+RUN --mount=from=ghcr.io/astral-sh/uv:latest,source=/uv,target=/usr/local/bin/uv \
+    --mount=type=cache,target=/root/.cache \
+    uv sync --frozen --no-dev
 
-# Install the package (pretend version for hatch-vcs since no .git in container)
-RUN SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION} uv pip install --system --no-cache .
 
+FROM base
 
-# Final stage
-FROM docker.io/python:3.14-alpine
-
-# Install runtime dependencies
 RUN apk add --no-cache \
     ffmpeg \
     openssl \
@@ -51,40 +53,27 @@ RUN case "${TARGETARCH}" in \
     tar -xz -C /usr/local/bin mediamtx && \
     chmod +x /usr/local/bin/mediamtx
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
-COPY --from=builder /usr/local/bin/pandaproxy /usr/local/bin/pandaproxy
-
 # Allow binding to privileged ports (<1024) as non-root
 RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/python3.14 && \
     setcap 'cap_net_bind_service=+ep' /usr/local/bin/mediamtx
 
-# Create non-root user
-RUN adduser -D -u 1000 pandaproxy
-USER pandaproxy
-
-# Set working directory
+ARG UID=10001
+RUN adduser -D -H -h /app -u "${UID}" appuser
+USER appuser
 WORKDIR /app
 
-# Environment variables (can be overridden)
-ENV PRINTER_IP=""
-ENV ACCESS_CODE=""
-ENV SERIAL_NUMBER=""
-ENV BIND_ADDRESS="0.0.0.0"
-ENV SERVICES=""
-ENV ENABLE_ALL=""
+COPY --from=builder --chown=${UID} /app /app
 
-# Expose ports
-# 322: RTSP camera (X1/H2/P2)
-# 6000: Chamber image (A1/P1)
-# 8883: MQTT (printer control/status)
-# 990: FTP (file uploads)
+ENV PRINTER_IP="" \
+    ACCESS_CODE="" \
+    SERIAL_NUMBER="" \
+    BIND_ADDRESS="0.0.0.0" \
+    SERVICES="" \
+    ENABLE_ALL=""
+
 EXPOSE 322 6000 8883 990
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD pgrep -f pandaproxy || exit 1
 
-# Run the proxy
-ENTRYPOINT ["pandaproxy"]
-CMD []
+CMD [ "pandaproxy" ]

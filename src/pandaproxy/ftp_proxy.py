@@ -136,9 +136,7 @@ class FTPProxy:
             logger.debug("Connected to printer %s:%d", self.printer_ip, port)
 
             # Forward data in both directions
-            await self._forward_bidirectional(
-                client_reader, client_writer, upstream_reader, upstream_writer
-            )
+            await self._forward_bidirectional(client_reader, client_writer, upstream_reader, upstream_writer)
 
         except TimeoutError:
             logger.warning("Connection to printer %s:%d timed out", self.printer_ip, port)

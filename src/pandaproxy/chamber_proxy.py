@@ -117,9 +117,7 @@ class ChamberImageProxy:
             writer: asyncio.StreamWriter | None = None
 
             try:
-                logger.info(
-                    "Connecting to printer chamber image at %s:%d", self.printer_ip, self.port
-                )
+                logger.info("Connecting to printer chamber image at %s:%d", self.printer_ip, self.port)
 
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(
@@ -168,9 +166,7 @@ class ChamberImageProxy:
             except TimeoutError:
                 logger.warning("Upstream connection timeout")
             except asyncio.IncompleteReadError as e:
-                logger.warning(
-                    "Upstream connection closed: incomplete read (%d bytes)", len(e.partial)
-                )
+                logger.warning("Upstream connection closed: incomplete read (%d bytes)", len(e.partial))
             except ConnectionRefusedError:
                 logger.error("Connection refused by printer")
             except ssl.SSLError as e:

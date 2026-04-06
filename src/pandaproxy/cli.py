@@ -71,9 +71,7 @@ def parse_services(services_str: str | None, enable_all: bool) -> set[str]:
     # Validate service names
     invalid = services - all_services
     if invalid:
-        raise typer.BadParameter(
-            f"Invalid service(s): {', '.join(invalid)}. Valid services: {', '.join(all_services)}"
-        )
+        raise typer.BadParameter(f"Invalid service(s): {', '.join(invalid)}. Valid services: {', '.join(all_services)}")
 
     return services
 
