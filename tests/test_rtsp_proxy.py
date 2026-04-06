@@ -190,9 +190,7 @@ class TestRTSPProxyLifecycle:
             key_path=key_path,
         )
 
-        with patch(
-            "pandaproxy.rtsp_proxy.check_dependencies", return_value=(False, ["ffmpeg", "mediamtx"])
-        ):
+        with patch("pandaproxy.rtsp_proxy.check_dependencies", return_value=(False, ["ffmpeg", "mediamtx"])):
             with pytest.raises(RuntimeError) as exc_info:
                 await proxy.start()
 

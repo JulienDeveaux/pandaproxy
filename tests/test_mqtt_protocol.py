@@ -190,9 +190,7 @@ class TestParseConnect:
         return bytes(vh) + bytes(pl)
 
     def test_parse_with_credentials(self):
-        data = self._build_connect_payload(
-            client_id="myclient", username="bblp", password="12345678"
-        )
+        data = self._build_connect_payload(client_id="myclient", username="bblp", password="12345678")
         info = parse_connect(data)
         assert info.client_id == "myclient"
         assert info.username == "bblp"
