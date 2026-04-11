@@ -1,0 +1,23 @@
+# Suppression rules for known-correct patterns in pandaproxy.
+# Loaded by pulltergeist on every webhook review and synced into the feedback DB,
+# overriding any comment-sourced rules with the same scope.
+
+[[rules]]
+code_pattern = "check_hostname"
+disposition = "by_design"
+reason = "BambuLab printers use raw IP addresses, making hostname verification structurally impossible. CERT_REQUIRED with the bundled CA still enforces cert trust."
+
+[[rules]]
+code_pattern = "return_exceptions"
+disposition = "by_design"
+reason = "asyncio.gather with return_exceptions=True is used for cleanup/cancellation fan-out where all tasks must be awaited even if some fail. Return values are intentionally discarded."
+
+[[rules]]
+code_pattern = "SSLError"
+disposition = "by_design"
+reason = "Catching SSLError, logging, and dropping the connection is complete error handling for a TLS pass-through proxy. The upstream/downstream pair is already disrupted."
+
+[[rules]]
+code_pattern = "run_in_executor"
+disposition = "by_design"
+reason = "asyncio.to_thread() is the correct pattern for Python 3.13. get_event_loop().run_in_executor() is deprecated and must not be suggested."
