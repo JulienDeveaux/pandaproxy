@@ -42,7 +42,7 @@ class ChamberImageProxy:
         access_code: str,
         cert_path: Path,
         key_path: Path,
-        bind_address: str = "0.0.0.0",
+        bind_address: str = "0.0.0.0",  # noqa: S104  # pandaproxy binds all interfaces by design
     ) -> None:
         self.printer_ip = printer_ip
         self.access_code = access_code

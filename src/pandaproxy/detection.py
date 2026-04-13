@@ -133,19 +133,18 @@ async def detect_camera_type(ip: str, access_code: str) -> str:
     if chamber_result and not rtsp_result:
         logger.info("Detected camera type: Chamber Image (A1/P1 series)")
         return "chamber"
-    elif rtsp_result and not chamber_result:
+    if rtsp_result and not chamber_result:
         logger.info("Detected camera type: RTSP (X1/H2/P2 series)")
         return "rtsp"
-    elif chamber_result and rtsp_result:
+    if chamber_result and rtsp_result:
         # Both responded - prefer chamber as it's more specific
         logger.info("Both protocols responded, using Chamber Image")
         return "chamber"
-    else:
-        raise RuntimeError(
-            f"Could not detect camera type for printer at {ip}. "
-            "Please ensure:\n"
-            "  - The printer is powered on and connected to the network\n"
-            "  - LAN Mode is enabled\n"
-            "  - Development Mode is enabled\n"
-            "  - The access code is correct"
-        )
+    raise RuntimeError(
+        f"Could not detect camera type for printer at {ip}. "
+        "Please ensure:\n"
+        "  - The printer is powered on and connected to the network\n"
+        "  - LAN Mode is enabled\n"
+        "  - Development Mode is enabled\n"
+        "  - The access code is correct"
+    )

@@ -79,7 +79,7 @@ def parse_services(services_str: str | None, enable_all: bool) -> set[str]:
 def is_running_in_docker() -> bool:
     """Check if the application is running inside a Docker container."""
     # Check for the existence of .dockerenv file
-    if os.path.exists("/.dockerenv"):
+    if Path("/.dockerenv").exists():
         return True
 
     # Check for RUNNING_IN_DOCKER environment variable (used in our Dockerfile)
@@ -88,7 +88,7 @@ def is_running_in_docker() -> bool:
 
     # Check cgroup for "docker" string on Linux
     try:
-        with open("/proc/1/cgroup") as f:
+        with Path("/proc/1/cgroup").open() as f:
             return "docker" in f.read()
     except FileNotFoundError:
         pass  # File doesn't exist, not a Linux-based container
@@ -126,14 +126,14 @@ async def run_proxy(
     try:
         # Generate shared TLS certificate
         certs_dir = Path("certs")
-        certs_dir.mkdir(exist_ok=True)
+        certs_dir.mkdir(exist_ok=True)  # noqa: ASYNC240  # asyncio-native app; trio/anyio not used
         cert_path = certs_dir / CERT_FILENAME
         key_path = certs_dir / KEY_FILENAME
 
         if not cert_path.exists() or not key_path.exists():
             logger.info("Generating shared TLS certificate...")
             san_ips = ["127.0.0.1", "::1"]
-            if bind != "0.0.0.0":
+            if bind != "0.0.0.0":  # noqa: S104  # intentional: skip adding default bind-all to SAN
                 san_ips.append(bind)
 
             generate_self_signed_cert(
@@ -297,7 +297,7 @@ def main(
             help="Address to bind the proxy servers to",
             envvar="BIND_ADDRESS",
         ),
-    ] = "0.0.0.0",
+    ] = "0.0.0.0",  # noqa: S104  # pandaproxy defaults to bind all interfaces
     services: Annotated[
         str | None,
         typer.Option(

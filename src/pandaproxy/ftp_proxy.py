@@ -38,7 +38,7 @@ class FTPProxy:
     def __init__(
         self,
         printer_ip: str,
-        bind_address: str = "0.0.0.0",
+        bind_address: str = "0.0.0.0",  # noqa: S104  # pandaproxy binds all interfaces by design
     ) -> None:
         self.printer_ip = printer_ip
         self.bind_address = bind_address
@@ -185,7 +185,7 @@ class FTPProxy:
 
         try:
             # Wait for either direction to complete
-            done, pending = await asyncio.wait([task1, task2], return_when=asyncio.FIRST_COMPLETED)
+            _done, pending = await asyncio.wait([task1, task2], return_when=asyncio.FIRST_COMPLETED)
 
             # Cancel the other direction
             for task in pending:

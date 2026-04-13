@@ -19,9 +19,12 @@ import asyncio
 import contextlib
 import logging
 import ssl
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import aiomqtt
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from pandaproxy.helper import close_writer, create_ssl_context
 from pandaproxy.mqtt_protocol import (
@@ -77,7 +80,7 @@ class MQTTProxy:
         serial_number: str,
         cert_path: Path,
         key_path: Path,
-        bind_address: str = "0.0.0.0",
+        bind_address: str = "0.0.0.0",  # noqa: S104  # pandaproxy binds all interfaces by design
     ) -> None:
         self.printer_ip = printer_ip
         self.access_code = access_code
@@ -311,7 +314,7 @@ class MQTTProxy:
             send_task = asyncio.create_task(self._client_send_loop(client_id, queue, writer))
             recv_task = asyncio.create_task(self._client_recv_loop(client_id, reader, writer, keepalive))
 
-            done, pending = await asyncio.wait([send_task, recv_task], return_when=asyncio.FIRST_COMPLETED)
+            _done, pending = await asyncio.wait([send_task, recv_task], return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
