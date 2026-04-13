@@ -1,6 +1,7 @@
 """Shared helper utilities for PandaProxy."""
 
 import asyncio
+import contextlib
 import datetime
 import ipaddress
 import os
@@ -69,7 +70,7 @@ def parse_auth_payload(data: bytes) -> str | None:
         return None
 
     try:
-        magic, command, _, username, access_code = struct.unpack("<II8s32s32s", data)
+        magic, command, _, _username, access_code = struct.unpack("<II8s32s32s", data)
 
         if magic != AUTH_MAGIC or command != AUTH_COMMAND:
             return None
@@ -128,8 +129,7 @@ def generate_self_signed_cert(
     if san_dns:
         sans.extend(x509.DNSName(dns) for dns in san_dns)
     if san_ips:
-        for ip in san_ips:
-            sans.append(x509.IPAddress(ipaddress.ip_address(ip)))
+        sans.extend(x509.IPAddress(ipaddress.ip_address(ip)) for ip in san_ips)
 
     if not sans:
         # Default to localhost if no SANs provided
@@ -154,7 +154,7 @@ def generate_self_signed_cert(
         cert_path = Path(cert_path_str)
         key_path = Path(key_path_str)
 
-    with open(key_path, "wb") as f:
+    with key_path.open("wb") as f:
         f.write(
             key.private_bytes(
                 encoding=serialization.Encoding.PEM,
@@ -162,13 +162,13 @@ def generate_self_signed_cert(
                 encryption_algorithm=serialization.NoEncryption(),
             )
         )
-    with open(cert_path, "wb") as f:
+    with cert_path.open("wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     return cert_path, key_path
 
 
-async def close_writer(writer: asyncio.StreamWriter, timeout: float = 2.0) -> None:
+async def close_writer(writer: asyncio.StreamWriter, timeout: float = 2.0) -> None:  # noqa: ASYNC109  # timeout IS enforced via asyncio.wait_for below
     """Safely close an asyncio StreamWriter with timeout.
 
     If the graceful close times out (common with SSL), aborts the transport
@@ -186,5 +186,18 @@ async def close_writer(writer: asyncio.StreamWriter, timeout: float = 2.0) -> No
         transport = writer.transport
         if transport:
             transport.abort()
-    except Exception:
-        pass  # Ignore other errors during close
+    except Exception:  # noqa: S110  # suppress residual errors during stream teardown (e.g. SSL reset)
+        pass  # non-actionable at this point; connection is already gone
+
+
+async def cancel_task(task: asyncio.Task, grace: float = 2.0) -> None:
+    """Cancel an asyncio Task, giving it a grace period to finish naturally first.
+
+    Waits up to *grace* seconds for the task to complete on its own (e.g. after
+    its underlying I/O source closes), then cancels it and waits for the
+    cancellation to propagate.  Safe to call on an already-done task.
+    """
+    with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+        await asyncio.wait_for(task, timeout=grace)
+    with contextlib.suppress(asyncio.CancelledError):
+        await task

@@ -53,11 +53,28 @@ select = [
     "UP",     # pyupgrade
     "ARG",    # flake8-unused-arguments
     "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific (dangling tasks, implicit Optional, etc.)
+    "PERF",   # performance anti-patterns
+    "RET",    # return statement style
+    "DTZ",    # datetime timezone awareness
+    "ASYNC",  # async correctness
+    "PT",     # pytest style
+    "T20",    # print statement detection
+    "S",      # bandit security
+    "PTH",    # pathlib usage
+    "TC",     # type-checking imports
+    "FA",     # future-annotations (`from __future__ import annotations` in every file)
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
     "B008",   # do not perform function calls in argument defaults
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# ARG: pytest fixtures are name-injected; RUF059: unused unpacked test helper vars;
+# S101: assert is how pytest works; S104: tests verify proxy bind-all defaults;
+# S105/S106/S107: hardcoded test fixture passwords.
+"tests/**/*.py" = ["ARG", "RUF059", "S101", "S104", "S105", "S106", "S107"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pandaproxy"]

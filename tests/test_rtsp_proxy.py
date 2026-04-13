@@ -32,6 +32,19 @@ def temp_certs():
         yield cert_path, key_path
 
 
+@pytest.fixture
+def mock_subprocess():
+    """Mock asyncio subprocess with EOF-returning stdout/stderr pipes."""
+    proc = MagicMock()
+    proc.stdout = MagicMock()
+    proc.stdout.readline = AsyncMock(return_value=b"")
+    proc.stderr = MagicMock()
+    proc.stderr.readline = AsyncMock(return_value=b"")
+    proc.returncode = None
+    proc.wait = AsyncMock()
+    return proc
+
+
 class TestCheckDependencies:
     """Tests for check_dependencies function."""
 
@@ -217,7 +230,7 @@ class TestRTSPProxyLifecycle:
             await proxy.start()
 
     @pytest.mark.asyncio
-    async def test_start_sets_running_flag(self, temp_certs):
+    async def test_start_sets_running_flag(self, temp_certs, mock_subprocess):
         """Start should set _running to True."""
         cert_path, key_path = temp_certs
 
@@ -228,17 +241,9 @@ class TestRTSPProxyLifecycle:
             key_path=key_path,
         )
 
-        # Create mock process - use MagicMock since terminate()/kill() are sync methods
-        # Only wait() is async on asyncio.subprocess.Process
-        mock_process = MagicMock()
-        mock_process.stdout = AsyncMock()
-        mock_process.stderr = AsyncMock()
-        mock_process.returncode = None
-        mock_process.wait = AsyncMock()
-
         with (
             patch("pandaproxy.rtsp_proxy.check_dependencies", return_value=(True, [])),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("asyncio.create_subprocess_exec", return_value=mock_subprocess),
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
             try:
@@ -249,7 +254,7 @@ class TestRTSPProxyLifecycle:
                 await proxy.stop()
 
     @pytest.mark.asyncio
-    async def test_stop_clears_running_flag(self, temp_certs):
+    async def test_stop_clears_running_flag(self, temp_certs, mock_subprocess):
         """Stop should set _running to False."""
         cert_path, key_path = temp_certs
 
@@ -260,17 +265,9 @@ class TestRTSPProxyLifecycle:
             key_path=key_path,
         )
 
-        # Create mock process - use MagicMock since terminate()/kill() are sync methods
-        # Only wait() is async on asyncio.subprocess.Process
-        mock_process = MagicMock()
-        mock_process.stdout = AsyncMock()
-        mock_process.stderr = AsyncMock()
-        mock_process.returncode = None
-        mock_process.wait = AsyncMock()
-
         with (
             patch("pandaproxy.rtsp_proxy.check_dependencies", return_value=(True, [])),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("asyncio.create_subprocess_exec", return_value=mock_subprocess),
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
             await proxy.start()

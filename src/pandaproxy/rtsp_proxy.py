@@ -15,6 +15,8 @@ from pathlib import Path
 
 import ffmpeg
 
+from pandaproxy.helper import cancel_task
+
 logger = logging.getLogger(__name__)
 
 # MediaMTX configuration template
@@ -90,7 +92,7 @@ class RTSPProxy:
         access_code: str,
         cert_path: Path,
         key_path: Path,
-        bind_address: str = "0.0.0.0",
+        bind_address: str = "0.0.0.0",  # noqa: S104  # pandaproxy binds all interfaces by design
         mediamtx_internal_port: int = 8554,
     ) -> None:
         self.printer_ip = printer_ip
@@ -106,6 +108,8 @@ class RTSPProxy:
         self._running = False
         self._config_path: Path | None = None
         self._monitor_task: asyncio.Task | None = None
+        self._mediamtx_log_task: asyncio.Task | None = None
+        self._ffmpeg_log_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start the RTSP proxy (MediaMTX + FFmpeg)."""
@@ -168,6 +172,12 @@ class RTSPProxy:
                 self._mediamtx_process.kill()
             self._mediamtx_process = None
 
+        log_tasks = [t for t in (self._ffmpeg_log_task, self._mediamtx_log_task) if t]
+        if log_tasks:
+            await asyncio.gather(*(cancel_task(t) for t in log_tasks))
+        self._ffmpeg_log_task = None
+        self._mediamtx_log_task = None
+
         # Clean up config file
         if self._config_path and self._config_path.exists():
             self._config_path.unlink()
@@ -210,7 +220,7 @@ class RTSPProxy:
         os.close(fd)
         config_path = Path(path)
 
-        config_path.write_text(config_content)
+        config_path.write_text(config_content)  # noqa: ASYNC240  # asyncio-native app; trio/anyio not used
         logger.debug("Created MediaMTX config at %s", config_path)
 
         return config_path
@@ -228,7 +238,7 @@ class RTSPProxy:
         )
 
         # Start log readers
-        asyncio.create_task(self._read_process_output(self._mediamtx_process, "mediamtx"))
+        self._mediamtx_log_task = asyncio.create_task(self._read_process_output(self._mediamtx_process, "mediamtx"))
 
     async def _start_ffmpeg(self) -> None:
         """Start FFmpeg process to pull RTSPS from printer and push to MediaMTX."""
@@ -282,7 +292,7 @@ class RTSPProxy:
         )
 
         # Start log readers
-        asyncio.create_task(self._read_process_output(self._ffmpeg_process, "ffmpeg"))
+        self._ffmpeg_log_task = asyncio.create_task(self._read_process_output(self._ffmpeg_process, "ffmpeg"))
 
     async def _read_process_output(self, process: asyncio.subprocess.Process, name: str) -> None:
         """Read and log process stdout/stderr."""
