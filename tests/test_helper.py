@@ -4,7 +4,7 @@ import ssl
 import struct
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,7 @@ from pandaproxy.helper import (
     create_auth_payload,
     create_ssl_context,
     generate_self_signed_cert,
+    open_connection_safe,
     parse_auth_payload,
 )
 from pandaproxy.protocol import AUTH_COMMAND, AUTH_MAGIC
@@ -182,6 +183,63 @@ class TestCreateSslContext:
         # Client contexts don't require certificates to be loaded
         # We just verify it's a valid context
         assert ctx is not None
+
+
+class TestOpenConnectionSafe:
+    """Tests for open_connection_safe function."""
+
+    @pytest.mark.asyncio
+    async def test_returns_reader_writer_on_success(self):
+        """Should return (reader, writer) when connection succeeds."""
+        reader = AsyncMock()
+        writer = AsyncMock()
+        with patch("pandaproxy.helper.asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))):
+            result = await open_connection_safe("192.168.1.1", 6000)
+        assert result == (reader, writer)
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_timeout(self):
+        """Should return None and not raise on TimeoutError."""
+        with (
+            patch("pandaproxy.helper.asyncio.open_connection", new_callable=MagicMock),
+            patch("pandaproxy.helper.asyncio.wait_for", new=AsyncMock(side_effect=TimeoutError())),
+        ):
+            result = await open_connection_safe("192.168.1.1", 6000)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_connection_refused(self):
+        """Should return None and not raise on ConnectionRefusedError."""
+        with (
+            patch("pandaproxy.helper.asyncio.open_connection", new_callable=MagicMock),
+            patch("pandaproxy.helper.asyncio.wait_for", new=AsyncMock(side_effect=ConnectionRefusedError())),
+        ):
+            result = await open_connection_safe("192.168.1.1", 6000)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_os_error(self):
+        """Should return None and not raise on OSError."""
+        with (
+            patch("pandaproxy.helper.asyncio.open_connection", new_callable=MagicMock),
+            patch("pandaproxy.helper.asyncio.wait_for", new=AsyncMock(side_effect=OSError("Network unreachable"))),
+        ):
+            result = await open_connection_safe("192.168.1.1", 6000)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_passes_ssl_context_to_open_connection(self):
+        """Should forward ssl_context to asyncio.open_connection."""
+        reader = AsyncMock()
+        writer = AsyncMock()
+        mock_ctx = MagicMock(spec=ssl.SSLContext)
+
+        with patch(
+            "pandaproxy.helper.asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))
+        ) as mock_conn:
+            await open_connection_safe("192.168.1.1", 6000, ssl_context=mock_ctx)
+
+        mock_conn.assert_called_once_with("192.168.1.1", 6000, ssl=mock_ctx)
 
 
 class TestCloseWriter:

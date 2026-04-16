@@ -325,6 +325,10 @@ class RTSPProxy:
                     logger.warning("MediaMTX process exited with code %d", self._mediamtx_process.returncode)
                     if self._running:
                         logger.info("Restarting MediaMTX...")
+                        # Cancel the old log task before starting fresh (avoids task leak)
+                        if self._mediamtx_log_task:
+                            await cancel_task(self._mediamtx_log_task)
+                            self._mediamtx_log_task = None
                         await self._start_mediamtx()
                         await asyncio.sleep(2)
 
@@ -333,6 +337,10 @@ class RTSPProxy:
                     logger.warning("FFmpeg process exited with code %d", self._ffmpeg_process.returncode)
                     if self._running:
                         logger.info("Restarting FFmpeg in 5 seconds...")
+                        # Cancel the old log task before starting fresh (avoids task leak)
+                        if self._ffmpeg_log_task:
+                            await cancel_task(self._ffmpeg_log_task)
+                            self._ffmpeg_log_task = None
                         await asyncio.sleep(5)
                         await self._start_ffmpeg()
             except asyncio.CancelledError:

@@ -237,7 +237,7 @@ class MQTTProxy:
                 except aiomqtt.MqttError as e:
                     logger.warning("Failed to forward to upstream: %s", e)
             else:
-                logger.debug("Upstream not connected, dropping client publish")
+                logger.warning("Upstream not connected, dropping client publish to %s", topic)
 
     # ------------------------------------------------------------------
     # Client broadcast

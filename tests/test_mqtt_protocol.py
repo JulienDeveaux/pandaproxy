@@ -339,3 +339,51 @@ class TestRoundtrip:
         assert info.payload == b"data"
         assert info.qos == 1
         assert info.packet_id == 100
+
+
+class TestMalformedPackets:
+    """Tests that malformed packets raise ValueError with clear messages."""
+
+    def test_parse_connect_empty_raises(self):
+        with pytest.raises(ValueError, match="Malformed CONNECT"):
+            parse_connect(b"")
+
+    def test_parse_connect_truncated_proto_raises(self):
+        """Payload with proto_len but truncated proto name should raise."""
+        with pytest.raises(ValueError, match="Malformed CONNECT"):
+            parse_connect(b"\x00\x04MQ")  # claims 4-byte name but only 2 bytes follow
+
+    def test_parse_connect_truncated_payload_raises(self):
+        """Proto name present but rest of payload truncated should raise."""
+        with pytest.raises(ValueError, match="Malformed CONNECT"):
+            # Valid proto prefix, then nothing
+            parse_connect(b"\x00\x04MQTT\x04")  # missing connect flags onward
+
+    def test_parse_subscribe_empty_raises(self):
+        with pytest.raises(ValueError, match="Malformed SUBSCRIBE"):
+            parse_subscribe(b"")
+
+    def test_parse_subscribe_truncated_topic_raises(self):
+        """Topic length field claims 32 bytes but only 5 bytes remain - explicit bounds check fires."""
+        data = struct.pack(">H", 1) + struct.pack(">H", 32) + b"short"
+        with pytest.raises(ValueError, match="Malformed SUBSCRIBE"):
+            parse_subscribe(data)
+
+    def test_parse_unsubscribe_empty_raises(self):
+        with pytest.raises(ValueError, match="Malformed UNSUBSCRIBE"):
+            parse_unsubscribe(b"")
+
+    def test_parse_unsubscribe_truncated_topic_raises(self):
+        """Claims a 32-byte topic but payload is too short."""
+        data = struct.pack(">H", 1) + struct.pack(">H", 32) + b"short"
+        with pytest.raises(ValueError, match="Malformed UNSUBSCRIBE"):
+            parse_unsubscribe(data)
+
+    def test_parse_publish_empty_raises(self):
+        with pytest.raises(ValueError, match="Malformed PUBLISH"):
+            parse_publish(0, b"")
+
+    def test_parse_publish_truncated_topic_raises(self):
+        """Claims a 32-byte topic but payload has no topic bytes."""
+        with pytest.raises(ValueError, match="Malformed PUBLISH"):
+            parse_publish(0, b"\x00\x20")  # topic_len=32 but no topic bytes follow

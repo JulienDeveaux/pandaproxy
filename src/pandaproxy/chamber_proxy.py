@@ -28,6 +28,18 @@ from pandaproxy.protocol import CHAMBER_PORT, MAX_PAYLOAD_SIZE
 
 logger = logging.getLogger(__name__)
 
+# Timeout for the upstream connection attempt
+UPSTREAM_CONNECT_TIMEOUT = 10.0
+
+# Timeout per frame read from the printer (seconds); covers the header and JPEG data reads
+UPSTREAM_READ_TIMEOUT = 30.0
+
+# Timeout for the client's initial 80-byte auth payload
+CLIENT_AUTH_TIMEOUT = 10.0
+
+# How long a client waits for the upstream connection to become ready
+CLIENT_UPSTREAM_WAIT_TIMEOUT = 30.0
+
 
 class ChamberImageProxy:
     """Chamber image fan-out proxy for BambuLab camera stream.
@@ -125,7 +137,7 @@ class ChamberImageProxy:
                         self.port,
                         ssl=self._ssl_context,
                     ),
-                    timeout=10.0,
+                    timeout=UPSTREAM_CONNECT_TIMEOUT,
                 )
 
                 logger.info("Connected to printer chamber image stream")
@@ -142,7 +154,7 @@ class ChamberImageProxy:
                 # Continuously read frames and broadcast
                 while self._running:
                     # Read 16-byte header
-                    header = await asyncio.wait_for(reader.readexactly(16), timeout=30.0)
+                    header = await asyncio.wait_for(reader.readexactly(16), timeout=UPSTREAM_READ_TIMEOUT)
 
                     # Parse payload size (little-endian uint32 at offset 0)
                     payload_size = struct.unpack("<I", header[0:4])[0]
@@ -154,7 +166,7 @@ class ChamberImageProxy:
                     # Read JPEG data
                     jpeg_data = await asyncio.wait_for(
                         reader.readexactly(payload_size),
-                        timeout=30.0,
+                        timeout=UPSTREAM_READ_TIMEOUT,
                     )
 
                     # Broadcast header + jpeg to all clients (same format as printer sends)
@@ -198,7 +210,7 @@ class ChamberImageProxy:
         try:
             # Wait for client to send 80-byte auth payload
             try:
-                auth_data = await asyncio.wait_for(reader.readexactly(80), timeout=10.0)
+                auth_data = await asyncio.wait_for(reader.readexactly(80), timeout=CLIENT_AUTH_TIMEOUT)
             except TimeoutError:
                 logger.warning("Client %s auth timeout", client_addr)
                 return
@@ -218,7 +230,7 @@ class ChamberImageProxy:
             if not self._upstream_connected.is_set():
                 logger.info("Waiting for upstream connection...")
                 try:
-                    await asyncio.wait_for(self._upstream_connected.wait(), timeout=30.0)
+                    await asyncio.wait_for(self._upstream_connected.wait(), timeout=CLIENT_UPSTREAM_WAIT_TIMEOUT)
                 except TimeoutError:
                     logger.warning("Upstream connection timeout for client %s", client_addr)
                     return
@@ -250,7 +262,3 @@ class ChamberImageProxy:
         finally:
             logger.info("Client %s disconnected", client_addr)
             await close_writer(writer)
-
-
-# Alias for backward compatibility
-WebSocketProxy = ChamberImageProxy
