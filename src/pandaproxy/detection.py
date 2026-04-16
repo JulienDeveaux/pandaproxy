@@ -6,12 +6,14 @@ protocol by probing both endpoints.
 
 import asyncio
 import logging
+import ssl
 import struct
 
 from pandaproxy.helper import (
     close_writer,
     create_auth_payload,
     create_ssl_context,
+    open_connection_safe,
 )
 from pandaproxy.protocol import CHAMBER_PORT, MAX_PAYLOAD_SIZE, RTSP_PORT
 
@@ -21,89 +23,75 @@ logger = logging.getLogger(__name__)
 DETECT_TIMEOUT = 5.0
 
 
-async def _probe_chamber_port(ip: str, access_code: str) -> bool:
+async def _probe_chamber_port(ip: str, access_code: str, ssl_context: ssl.SSLContext) -> bool:
     """Probe the chamber image port (6000) to see if it responds.
 
     Returns True if the printer responds to the chamber image protocol.
     """
-    ssl_context = create_ssl_context()
+    result = await open_connection_safe(
+        ip, CHAMBER_PORT, ssl_context=ssl_context, timeout=DETECT_TIMEOUT, name=f"chamber port {CHAMBER_PORT}"
+    )
+    if result is None:
+        return False
 
+    reader, writer = result
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(ip, CHAMBER_PORT, ssl=ssl_context),
-            timeout=DETECT_TIMEOUT,
-        )
+        # Send authentication payload
+        auth_payload = create_auth_payload(access_code)
+        writer.write(auth_payload)
+        await writer.drain()
 
-        try:
-            # Send authentication payload
-            auth_payload = create_auth_payload(access_code)
-            writer.write(auth_payload)
-            await writer.drain()
+        # Try to read the 16-byte header response
+        header = await asyncio.wait_for(reader.read(16), timeout=DETECT_TIMEOUT)
 
-            # Try to read the 16-byte header response
-            header = await asyncio.wait_for(reader.read(16), timeout=DETECT_TIMEOUT)
+        if len(header) >= 4:
+            # Check if we got a valid payload size
+            payload_size = struct.unpack("<I", header[0:4])[0]
+            if 0 < payload_size < MAX_PAYLOAD_SIZE:
+                logger.debug("Chamber image protocol detected (payload size: %d)", payload_size)
+                return True
 
-            if len(header) >= 4:
-                # Check if we got a valid payload size
-                payload_size = struct.unpack("<I", header[0:4])[0]
-                if 0 < payload_size < MAX_PAYLOAD_SIZE:
-                    logger.debug("Chamber image protocol detected (payload size: %d)", payload_size)
-                    return True
-
-        finally:
-            await close_writer(writer)
-
-    except TimeoutError:
-        logger.debug("Chamber port %d timeout", CHAMBER_PORT)
-    except ConnectionRefusedError:
-        logger.debug("Chamber port %d connection refused", CHAMBER_PORT)
-    except OSError as e:
-        logger.debug("Chamber port %d error: %s", CHAMBER_PORT, e)
+    except (TimeoutError, OSError) as e:
+        logger.debug("Chamber port %d probe failed: %s", CHAMBER_PORT, e)
+    finally:
+        await close_writer(writer)
 
     return False
 
 
-async def _probe_rtsp_port(ip: str) -> bool:
+async def _probe_rtsp_port(ip: str, ssl_context: ssl.SSLContext) -> bool:
     """Probe the RTSP port (322) to see if it responds.
 
     Returns True if the printer has an open RTSPS port.
     """
-    ssl_context = create_ssl_context()
+    result = await open_connection_safe(
+        ip, RTSP_PORT, ssl_context=ssl_context, timeout=DETECT_TIMEOUT, name=f"RTSP port {RTSP_PORT}"
+    )
+    if result is None:
+        return False
 
+    reader, writer = result
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(ip, RTSP_PORT, ssl=ssl_context),
-            timeout=DETECT_TIMEOUT,
-        )
+        # Send RTSP OPTIONS request
+        request = f"OPTIONS rtsp://{ip}:{RTSP_PORT}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n"
+        writer.write(request.encode())
+        await writer.drain()
 
-        try:
-            # Send RTSP OPTIONS request
-            request = f"OPTIONS rtsp://{ip}:{RTSP_PORT}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n"
-            writer.write(request.encode())
-            await writer.drain()
+        # Try to read response
+        response = await asyncio.wait_for(reader.read(1024), timeout=DETECT_TIMEOUT)
 
-            # Try to read response
-            response = await asyncio.wait_for(reader.read(1024), timeout=DETECT_TIMEOUT)
-
-            if response and (b"RTSP/1.0" in response or b"RTSP/2.0" in response):
+        if response:
+            if b"RTSP/1.0" in response or b"RTSP/2.0" in response:
                 logger.debug("RTSP protocol detected")
-                return True
-
-            # Even if we don't get a proper RTSP response, the port being open
-            # with TLS suggests it's an RTSP printer
-            if response:
+            else:
+                # Port is open with TLS but no RTSP banner - still likely an RTSP printer
                 logger.debug("RTSP port open but unexpected response, assuming RTSP")
-                return True
+            return True
 
-        finally:
-            await close_writer(writer)
-
-    except TimeoutError:
-        logger.debug("RTSP port %d timeout", RTSP_PORT)
-    except ConnectionRefusedError:
-        logger.debug("RTSP port %d connection refused", RTSP_PORT)
-    except OSError as e:
-        logger.debug("RTSP port %d error: %s", RTSP_PORT, e)
+    except (TimeoutError, OSError) as e:
+        logger.debug("RTSP port %d probe failed: %s", RTSP_PORT, e)
+    finally:
+        await close_writer(writer)
 
     return False
 
@@ -124,10 +112,13 @@ async def detect_camera_type(ip: str, access_code: str) -> str:
     """
     logger.info("Detecting camera type for printer at %s...", ip)
 
+    # Build one SSL context shared by both probes (both verify the same printer.cer)
+    ssl_context = create_ssl_context()
+
     # Probe both ports concurrently
     chamber_result, rtsp_result = await asyncio.gather(
-        _probe_chamber_port(ip, access_code),
-        _probe_rtsp_port(ip),
+        _probe_chamber_port(ip, access_code, ssl_context),
+        _probe_rtsp_port(ip, ssl_context),
     )
 
     if chamber_result and not rtsp_result:

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import datetime
 import ipaddress
+import logging
 import os
 import ssl
 import struct
@@ -14,6 +15,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+
+logger = logging.getLogger(__name__)
 
 
 def create_ssl_context() -> ssl.SSLContext:
@@ -166,6 +169,42 @@ def generate_self_signed_cert(
         f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     return cert_path, key_path
+
+
+async def open_connection_safe(
+    host: str,
+    port: int,
+    ssl_context: ssl.SSLContext | None = None,
+    timeout: float = 10.0,  # noqa: ASYNC109  # timeout IS enforced via asyncio.wait_for below
+    name: str = "",
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+    """Open a TCP connection with standard error handling.
+
+    Returns (reader, writer) on success, or None if the connection could not be established.
+    Logs connection-level failures (timeout, refused, OS error) at DEBUG level.
+    Other exceptions (e.g. CancelledError) propagate normally.
+
+    Args:
+        host: Hostname or IP address to connect to
+        port: TCP port number
+        ssl_context: Optional SSL context for TLS connections
+        timeout: Connection timeout in seconds (default 10s)
+        name: Label used in log messages (e.g. "chamber port 6000")
+    """
+    label = f"{name} " if name else ""
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, ssl=ssl_context),
+            timeout=timeout,
+        )
+        return reader, writer
+    except TimeoutError:
+        logger.debug("%sconnection to %s:%d timed out", label, host, port)
+    except ConnectionRefusedError:
+        logger.debug("%sconnection to %s:%d refused", label, host, port)
+    except OSError as e:
+        logger.debug("%sconnection to %s:%d failed: %s", label, host, port, e)
+    return None
 
 
 async def close_writer(writer: asyncio.StreamWriter, timeout: float = 2.0) -> None:  # noqa: ASYNC109  # timeout IS enforced via asyncio.wait_for below

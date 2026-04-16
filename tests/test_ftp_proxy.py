@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from pandaproxy.ftp_proxy import FTP_DATA_PORT_END, FTP_DATA_PORT_START, FTPProxy
+from pandaproxy.ftp_proxy import FTP_DATA_MIN_PORTS, FTP_DATA_PORT_END, FTP_DATA_PORT_START, FTPProxy
 
 # Use ephemeral ports for testing (avoids privileged port issues)
 TEST_CONTROL_PORT = 19990
@@ -229,6 +229,11 @@ class TestFTPProxyDataPorts:
         # Range should cover typical BambuLab PASV ports (around 2024-2025)
         assert FTP_DATA_PORT_START <= 2024
         assert FTP_DATA_PORT_END >= 2025
+
+    def test_min_ports_constant(self):
+        """FTP_DATA_MIN_PORTS should be a reasonable lower bound within the data port range."""
+        assert FTP_DATA_MIN_PORTS > 0
+        assert FTP_DATA_MIN_PORTS < (FTP_DATA_PORT_END - FTP_DATA_PORT_START + 1)
 
     @pytest.mark.asyncio
     async def test_data_port_servers_created(self, test_proxy, monkeypatch):

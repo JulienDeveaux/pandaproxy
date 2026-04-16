@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import logging
 
-from pandaproxy.helper import close_writer
+from pandaproxy.helper import close_writer, open_connection_safe
 from pandaproxy.protocol import FTP_PORT
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 # Printers typically use ports like 2024, 2025, etc. (high byte 7-8)
 FTP_DATA_PORT_START = 2000
 FTP_DATA_PORT_END = 2100
+
+# Warn if fewer than this many data ports bind successfully - below this PASV transfers will likely fail
+FTP_DATA_MIN_PORTS = 10
 
 
 class FTPProxy:
@@ -65,6 +68,7 @@ class FTPProxy:
         )
 
         # Start data channel servers (port range for PASV mode)
+        bind_failures = 0
         for data_port in range(FTP_DATA_PORT_START, FTP_DATA_PORT_END + 1):
             try:
                 server = await asyncio.start_server(
@@ -74,14 +78,27 @@ class FTPProxy:
                 )
                 self._data_servers.append(server)
             except OSError as e:
-                # Port might already be in use, skip it
+                bind_failures += 1
                 logger.debug("Could not bind to port %d: %s", data_port, e)
 
+        bound_count = len(self._data_servers)
+        total_ports = FTP_DATA_PORT_END - FTP_DATA_PORT_START + 1
+        if bind_failures > 0 and bound_count < FTP_DATA_MIN_PORTS:
+            logger.warning(
+                "FTP data port binding: only %d/%d ports available (%d failed) - passive FTP transfers may not work",
+                bound_count,
+                total_ports,
+                bind_failures,
+            )
+        elif bind_failures > 0:
+            logger.debug("FTP data port binding: %d/%d ports available", bound_count, total_ports)
+
         logger.info(
-            "FTP proxy listening on port %d and data ports %d-%d",
+            "FTP proxy listening on port %d and data ports %d-%d (%d bound)",
             self.port,
             FTP_DATA_PORT_START,
             FTP_DATA_PORT_END,
+            bound_count,
         )
 
     async def stop(self) -> None:
@@ -129,19 +146,18 @@ class FTPProxy:
 
         try:
             # Connect to printer on the same port
-            upstream_reader, upstream_writer = await asyncio.wait_for(
-                asyncio.open_connection(self.printer_ip, port),
-                timeout=10.0,
-            )
+            result = await open_connection_safe(self.printer_ip, port, timeout=10.0, name=f"FTP {port_type}")
+            if result is None:
+                if port == self.port:
+                    logger.warning("FTP control connection to printer %s:%d failed", self.printer_ip, port)
+                return
+
+            upstream_reader, upstream_writer = result
             logger.debug("Connected to printer %s:%d", self.printer_ip, port)
 
             # Forward data in both directions
             await self._forward_bidirectional(client_reader, client_writer, upstream_reader, upstream_writer)
 
-        except TimeoutError:
-            logger.warning("Connection to printer %s:%d timed out", self.printer_ip, port)
-        except ConnectionRefusedError:
-            logger.debug("Printer %s:%d refused connection", self.printer_ip, port)
         except Exception as e:
             logger.debug("FTP %s connection error: %s", port_type, e)
         finally:

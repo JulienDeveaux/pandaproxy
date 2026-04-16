@@ -185,115 +185,148 @@ def parse_connect(data: bytes) -> ConnectInfo:
 
     Payload order per MQTT 3.1.1 spec (section 3.1.3):
       Client ID → [Will Topic → Will Message] → [Username] → [Password]
+
+    Raises:
+        ValueError: If the payload is malformed or too short.
     """
-    offset = 0
+    try:
+        offset = 0
 
-    # Protocol name (length-prefixed)
-    proto_len = struct.unpack_from(">H", data, offset)[0]
-    offset += 2 + proto_len
+        # Protocol name (length-prefixed)
+        proto_len = struct.unpack_from(">H", data, offset)[0]
+        offset += 2 + proto_len
 
-    # Protocol level
-    offset += 1  # skip protocol level byte
+        # Protocol level
+        offset += 1  # skip protocol level byte
 
-    # Connect flags
-    connect_flags = data[offset]
-    offset += 1
-    has_username = bool(connect_flags & 0x80)
-    has_password = bool(connect_flags & 0x40)
-    has_will = bool(connect_flags & 0x04)
-    clean_session = bool(connect_flags & 0x02)
+        # Connect flags
+        connect_flags = data[offset]
+        offset += 1
+        has_username = bool(connect_flags & 0x80)
+        has_password = bool(connect_flags & 0x40)
+        has_will = bool(connect_flags & 0x04)
+        clean_session = bool(connect_flags & 0x02)
 
-    # Keepalive
-    keepalive = struct.unpack_from(">H", data, offset)[0]
-    offset += 2
-
-    # Client ID
-    cid_len = struct.unpack_from(">H", data, offset)[0]
-    offset += 2
-    client_id = data[offset : offset + cid_len].decode("utf-8")
-    offset += cid_len
-
-    # Will Topic + Will Message (skip if present, comes before username/password)
-    if has_will:
-        will_topic_len = struct.unpack_from(">H", data, offset)[0]
-        offset += 2 + will_topic_len
-        will_msg_len = struct.unpack_from(">H", data, offset)[0]
-        offset += 2 + will_msg_len
-
-    # Username (optional)
-    username = None
-    if has_username:
-        ulen = struct.unpack_from(">H", data, offset)[0]
+        # Keepalive
+        keepalive = struct.unpack_from(">H", data, offset)[0]
         offset += 2
-        username = data[offset : offset + ulen].decode("utf-8")
-        offset += ulen
 
-    # Password (optional)
-    password = None
-    if has_password:
-        plen = struct.unpack_from(">H", data, offset)[0]
+        # Client ID
+        cid_len = struct.unpack_from(">H", data, offset)[0]
         offset += 2
-        password = data[offset : offset + plen].decode("utf-8")
-        offset += plen
+        client_id = data[offset : offset + cid_len].decode("utf-8")
+        offset += cid_len
 
-    return ConnectInfo(
-        client_id=client_id,
-        username=username,
-        password=password,
-        keepalive=keepalive,
-        clean_session=clean_session,
-    )
+        # Will Topic + Will Message (skip if present, comes before username/password)
+        if has_will:
+            will_topic_len = struct.unpack_from(">H", data, offset)[0]
+            offset += 2 + will_topic_len
+            will_msg_len = struct.unpack_from(">H", data, offset)[0]
+            offset += 2 + will_msg_len
+
+        # Username (optional)
+        username = None
+        if has_username:
+            ulen = struct.unpack_from(">H", data, offset)[0]
+            offset += 2
+            username = data[offset : offset + ulen].decode("utf-8")
+            offset += ulen
+
+        # Password (optional)
+        password = None
+        if has_password:
+            plen = struct.unpack_from(">H", data, offset)[0]
+            offset += 2
+            password = data[offset : offset + plen].decode("utf-8")
+            offset += plen
+
+        return ConnectInfo(
+            client_id=client_id,
+            username=username,
+            password=password,
+            keepalive=keepalive,
+            clean_session=clean_session,
+        )
+    except (struct.error, IndexError, UnicodeDecodeError) as e:
+        raise ValueError(f"Malformed CONNECT packet: {e}") from e
 
 
 def parse_subscribe(data: bytes) -> tuple[int, list[tuple[str, int]]]:
-    """Parse SUBSCRIBE payload. Returns (packet_id, [(topic, qos), ...])."""
-    offset = 0
-    packet_id = struct.unpack_from(">H", data, offset)[0]
-    offset += 2
+    """Parse SUBSCRIBE payload. Returns (packet_id, [(topic, qos), ...]).
 
-    topics: list[tuple[str, int]] = []
-    while offset < len(data):
-        tlen = struct.unpack_from(">H", data, offset)[0]
-        offset += 2
-        topic = data[offset : offset + tlen].decode("utf-8")
-        offset += tlen
-        qos = data[offset]
-        offset += 1
-        topics.append((topic, qos))
-
-    return packet_id, topics
-
-
-def parse_unsubscribe(data: bytes) -> tuple[int, list[str]]:
-    """Parse UNSUBSCRIBE payload. Returns (packet_id, [topic, ...])."""
-    offset = 0
-    packet_id = struct.unpack_from(">H", data, offset)[0]
-    offset += 2
-
-    topics: list[str] = []
-    while offset < len(data):
-        tlen = struct.unpack_from(">H", data, offset)[0]
-        offset += 2
-        topic = data[offset : offset + tlen].decode("utf-8")
-        offset += tlen
-        topics.append(topic)
-
-    return packet_id, topics
-
-
-def parse_publish(flags: int, data: bytes) -> PublishInfo:
-    """Parse PUBLISH variable header + payload."""
-    offset = 0
-    qos = (flags >> 1) & 0x03
-
-    topic_len = struct.unpack_from(">H", data, offset)[0]
-    offset += 2
-    topic = data[offset : offset + topic_len].decode("utf-8")
-    offset += topic_len
-
-    packet_id = None
-    if qos > 0:
+    Raises:
+        ValueError: If the payload is malformed or too short.
+    """
+    try:
+        offset = 0
         packet_id = struct.unpack_from(">H", data, offset)[0]
         offset += 2
 
-    return PublishInfo(topic=topic, payload=data[offset:], qos=qos, packet_id=packet_id)
+        topics: list[tuple[str, int]] = []
+        while offset < len(data):
+            tlen = struct.unpack_from(">H", data, offset)[0]
+            offset += 2
+            if offset + tlen > len(data):
+                raise ValueError(f"Malformed SUBSCRIBE packet: topic length {tlen} exceeds remaining payload")
+            topic = data[offset : offset + tlen].decode("utf-8")
+            offset += tlen
+            qos = data[offset]
+            offset += 1
+            topics.append((topic, qos))
+
+        return packet_id, topics
+    except (struct.error, IndexError, UnicodeDecodeError) as e:
+        raise ValueError(f"Malformed SUBSCRIBE packet: {e}") from e
+
+
+def parse_unsubscribe(data: bytes) -> tuple[int, list[str]]:
+    """Parse UNSUBSCRIBE payload. Returns (packet_id, [topic, ...]).
+
+    Raises:
+        ValueError: If the payload is malformed or too short.
+    """
+    try:
+        offset = 0
+        packet_id = struct.unpack_from(">H", data, offset)[0]
+        offset += 2
+
+        topics: list[str] = []
+        while offset < len(data):
+            tlen = struct.unpack_from(">H", data, offset)[0]
+            offset += 2
+            if offset + tlen > len(data):
+                raise ValueError(f"Malformed UNSUBSCRIBE packet: topic length {tlen} exceeds remaining payload")
+            topic = data[offset : offset + tlen].decode("utf-8")
+            offset += tlen
+            topics.append(topic)
+
+        return packet_id, topics
+    except (struct.error, IndexError, UnicodeDecodeError) as e:
+        raise ValueError(f"Malformed UNSUBSCRIBE packet: {e}") from e
+
+
+def parse_publish(flags: int, data: bytes) -> PublishInfo:
+    """Parse PUBLISH variable header + payload.
+
+    Raises:
+        ValueError: If the payload is malformed or too short.
+    """
+    try:
+        offset = 0
+        qos = (flags >> 1) & 0x03
+
+        topic_len = struct.unpack_from(">H", data, offset)[0]
+        offset += 2
+        if offset + topic_len > len(data):
+            raise ValueError(f"Malformed PUBLISH packet: topic length {topic_len} exceeds remaining payload")
+        topic = data[offset : offset + topic_len].decode("utf-8")
+        offset += topic_len
+
+        packet_id = None
+        if qos > 0:
+            packet_id = struct.unpack_from(">H", data, offset)[0]
+            offset += 2
+
+        return PublishInfo(topic=topic, payload=data[offset:], qos=qos, packet_id=packet_id)
+    except (struct.error, IndexError, UnicodeDecodeError) as e:
+        raise ValueError(f"Malformed PUBLISH packet: {e}") from e
