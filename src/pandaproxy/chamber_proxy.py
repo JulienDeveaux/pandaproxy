@@ -111,7 +111,7 @@ class ChamberImageProxy:
         """Run the upstream connection loop as a standalone coroutine.
 
         This is the entry point called from cli.py as a background task.
-        It must never exit silently — any unexpected crash is logged and retried.
+        It must never exit silently - any unexpected crash is logged and retried.
         """
         self._upstream_task = asyncio.current_task()
         try:

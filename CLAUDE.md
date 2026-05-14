@@ -32,7 +32,7 @@ uv sync
 # Run the CLI
 uv run pandaproxy -p <PRINTER_IP> -a <ACCESS_CODE> -s <SERIAL_NUMBER>
 
-# Run tests (asyncio_mode = "auto" — no @pytest.mark.asyncio needed)
+# Run tests (asyncio_mode = "auto" - no @pytest.mark.asyncio needed)
 uv run pytest tests/ -v
 uv run pytest tests/ --cov          # With coverage
 

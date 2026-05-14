@@ -189,7 +189,7 @@ class RTSPProxy:
         """Run the process monitoring loop as a standalone coroutine.
 
         This is the entry point called from cli.py as a background task.
-        It must never exit silently — any unexpected crash is logged.
+        It must never exit silently - any unexpected crash is logged.
         """
         self._monitor_task = asyncio.current_task()
         try:
