@@ -1,14 +1,14 @@
-# pandaproxy — Agent Review Conventions
+# pandaproxy - Agent Review Conventions
 
 This file is read by AI code review agents. It describes project-specific patterns and rules that must be enforced during MR review. These are real bugs when violated, not style preferences.
 
 ## Project Overview
 
-pandaproxy is a Python 3.13 asyncio-based multi-service proxy for BambuLab 3D printers. It multiplexes multiple client connections onto single upstream printer connections for MQTT (port 8883), FTP (port 990), Chamber Camera (port 6000), and RTSP (port 322). All network I/O is async (asyncio streams). Ruff enforces formatting — skip style comments.
+pandaproxy is a Python 3.13 asyncio-based multi-service proxy for BambuLab 3D printers. It multiplexes multiple client connections onto single upstream printer connections for MQTT (port 8883), FTP (port 990), Chamber Camera (port 6000), and RTSP (port 322). All network I/O is async (asyncio streams). Ruff enforces formatting - skip style comments.
 
 ---
 
-## Critical Rules — Flag Any Violation
+## Critical Rules - Flag Any Violation
 
 ### 1. All Network Connections Require Timeouts
 
@@ -21,22 +21,22 @@ reader, writer = await asyncio.wait_for(
     timeout=10.0,
 )
 
-# WRONG — can hang forever
+# WRONG - can hang forever
 reader, writer = await asyncio.open_connection(host, port, ssl=ctx)
 ```
 
 ### 2. StreamWriter Closure Must Use `close_writer()` Helper
 
-`writer.close()` alone does not flush — `wait_closed()` is required. With SSL, `wait_closed()` can itself hang, so a timeout and transport abort are needed. Always use the `close_writer(writer)` helper from `pandaproxy.helper` which handles this correctly.
+`writer.close()` alone does not flush - `wait_closed()` is required. With SSL, `wait_closed()` can itself hang, so a timeout and transport abort are needed. Always use the `close_writer(writer)` helper from `pandaproxy.helper` which handles this correctly.
 
 ```python
 # CORRECT
 from pandaproxy.helper import close_writer
 await close_writer(writer)
 
-# WRONG — resource leak on SSL, may hang
+# WRONG - resource leak on SSL, may hang
 writer.close()
-# ALSO WRONG — hangs on SSL connections
+# ALSO WRONG - hangs on SSL connections
 writer.close()
 await writer.wait_closed()
 ```
@@ -51,7 +51,7 @@ if self._running:
     await asyncio.sleep(RECONNECT_DELAY)
     # reconnect...
 
-# WRONG — reconnects even during shutdown
+# WRONG - reconnects even during shutdown
 await asyncio.sleep(RECONNECT_DELAY)
 ```
 
@@ -64,7 +64,7 @@ All writes to shared dictionaries (`_clients`, `_upstream_client`) must hold the
 async with self._upstream_lock:
     self._upstream_client = client
 
-# WRONG — race condition
+# WRONG - race condition
 self._upstream_client = client
 ```
 
@@ -83,12 +83,12 @@ async def run_upstream_loop(self):
     except Exception:
         logger.exception("Unexpected crash in upstream loop")
 
-# WRONG — unhandled exception kills the loop silently
+# WRONG - unhandled exception kills the loop silently
 async def run_upstream_loop(self):
     await self._upstream_connection_loop()
 ```
 
-### 6. Task Creation Order — After `start()` Completes
+### 6. Task Creation Order - After `start()` Completes
 
 Background tasks must be created AFTER `await proxy.start()` returns. Background tasks check `self._running` which is set inside `start()`. Creating tasks before `start()` completes means they see `_running=False` and exit immediately.
 
@@ -97,7 +97,7 @@ Background tasks must be created AFTER `await proxy.start()` returns. Background
 await proxy.start()
 task = asyncio.create_task(proxy.run_upstream_loop())
 
-# WRONG — task sees _running=False, exits immediately
+# WRONG - task sees _running=False, exits immediately
 task = asyncio.create_task(proxy.run_upstream_loop())
 await proxy.start()
 ```
@@ -123,7 +123,7 @@ Never log the printer access code in plaintext. Mask before logging with `.repla
 # CORRECT
 logger.debug("Command: %s", payload.replace(self.access_code, "****"))
 
-# WRONG — credential leak
+# WRONG - credential leak
 logger.debug("Command: %s", payload)
 ```
 
@@ -137,18 +137,18 @@ Upstream SSL contexts must use `ctx.load_verify_locations()` with the bundled `p
 
 ---
 
-## Intentional Patterns — Do NOT Flag
+## Intentional Patterns - Do NOT Flag
 
 These are correct by design. Flagging any of them is a false positive.
 
-- **`ssl.SSLContext` with `check_hostname = False`** — BambuLab printers are accessed by raw IP address; hostname verification is structurally impossible. `verify_mode = ssl.CERT_REQUIRED` with the bundled CA bundle still enforces certificate trust. Do not flag `check_hostname=False` as a security issue.
+- **`ssl.SSLContext` with `check_hostname = False`** - BambuLab printers are accessed by raw IP address; hostname verification is structurally impossible. `verify_mode = ssl.CERT_REQUIRED` with the bundled CA bundle still enforces certificate trust. Do not flag `check_hostname=False` as a security issue.
 
-- **`asyncio.gather(*tasks, return_exceptions=True)` with discarded return values** — used for cleanup/cancellation fan-out where all tasks must be awaited even if some fail. Return values are intentionally discarded. Do not flag as "unchecked return value" or "ignored exceptions".
+- **`asyncio.gather(*tasks, return_exceptions=True)` with discarded return values** - used for cleanup/cancellation fan-out where all tasks must be awaited even if some fail. Return values are intentionally discarded. Do not flag as "unchecked return value" or "ignored exceptions".
 
-- **`ssl.SSLError` caught, logged, and connection dropped in proxy handlers** — for a pass-through proxy, logging and dropping the connection is complete error handling when TLS fails mid-connection. The upstream/downstream pair is already disrupted. Do not flag as "incomplete error handling".
+- **`ssl.SSLError` caught, logged, and connection dropped in proxy handlers** - for a pass-through proxy, logging and dropping the connection is complete error handling when TLS fails mid-connection. The upstream/downstream pair is already disrupted. Do not flag as "incomplete error handling".
 
-- **`asyncio.wait([t1, t2], return_when=FIRST_COMPLETED)` for bidirectional forwarding** — when one direction closes, the other is cancelled. This is the correct pattern for FTP and similar bidirectional proxies.
+- **`asyncio.wait([t1, t2], return_when=FIRST_COMPLETED)` for bidirectional forwarding** - when one direction closes, the other is cancelled. This is the correct pattern for FTP and similar bidirectional proxies.
 
-- **`StreamFanout.broadcast()` snapshots clients inside lock, sends outside lock** — prevents deadlock when a slow client's send() blocks. The snapshot is safe. Do not flag as "lock held too briefly" or "unlocked shared state".
+- **`StreamFanout.broadcast()` snapshots clients inside lock, sends outside lock** - prevents deadlock when a slow client's send() blocks. The snapshot is safe. Do not flag as "lock held too briefly" or "unlocked shared state".
 
-- **Per-client queue size limits (maxsize=100 for chamber, 200 for MQTT)** — intentional memory cap. When full, drop + disconnect the slow client. Do not suggest unbounded queues.
+- **Per-client queue size limits (maxsize=100 for chamber, 200 for MQTT)** - intentional memory cap. When full, drop + disconnect the slow client. Do not suggest unbounded queues.
