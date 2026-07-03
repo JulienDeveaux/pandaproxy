@@ -19,4 +19,4 @@ repos:
         entry: npx prettier --write --list-different --ignore-unknown
         language: node
         types_or: [yaml, markdown]
-        additional_dependencies: ["prettier@3.9.3"]
+        additional_dependencies: ["prettier@3.9.4"]
