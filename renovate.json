@@ -1,23 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    "abandonments:recommended",
-    "security:minimumReleaseAgeNpm",
-    ":enablePreCommit",
-    ":disableDependencyDashboard"
-  ],
-  "enabledManagers": [
-    "pep621",
-    "pre-commit",
-    "dockerfile",
-    "docker-compose",
-    "gitlabci",
-    "gitlabci-include"
-  ],
-  "automerge": true,
-  "automergeType": "pr",
-  "major": {
-    "automerge": false
-  }
+  "extends": ["local>nerdycraft/shared-ci"]
 }
