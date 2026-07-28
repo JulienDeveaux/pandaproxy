@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-FROM docker.io/library/python:3.14-alpine AS base
+ARG PYTHON_VERSION
+FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-trixie AS base
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -13,32 +14,28 @@ ENV LANG=C.UTF-8 \
 
 FROM base AS builder
 
-ARG VERSION=0.0.0-dev
-ENV SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION}
-
 WORKDIR /app
-
-RUN apk add --no-cache \
-    gcc \
-    musl-dev \
-    libffi-dev
 
 COPY pyproject.toml uv.lock ./
 COPY src/ src/
-RUN --mount=from=ghcr.io/astral-sh/uv:latest,source=/uv,target=/usr/local/bin/uv \
-    --mount=type=cache,target=/root/.cache \
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=bind,source=.git,target=/app/.git,readonly \
     uv sync --frozen --no-dev
 
 
 FROM base
 
-RUN apk add --no-cache \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     openssl \
     curl \
     ca-certificates \
-    libcap \
+    libcap2-bin \
     bash
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install MediaMTX
 ARG MEDIAMTX_VERSION=1.9.3
@@ -58,7 +55,7 @@ RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/python3.14 && \
     setcap 'cap_net_bind_service=+ep' /usr/local/bin/mediamtx
 
 ARG UID=10001
-RUN adduser -D -H -h /app -u "${UID}" appuser
+RUN useradd -l -m -r -d /app -u "${UID}" appuser
 USER appuser
 WORKDIR /app
 
@@ -76,4 +73,4 @@ EXPOSE 322 6000 8883 990
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD pgrep -f pandaproxy || exit 1
 
-CMD [ "pandaproxy" ]
+CMD [ "python", "-m", "pandaproxy" ]

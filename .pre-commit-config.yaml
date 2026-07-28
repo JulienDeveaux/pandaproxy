@@ -11,12 +11,3 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
-
-  - repo: local
-    hooks:
-      - id: prettier
-        name: prettier
-        entry: npx prettier --write --list-different --ignore-unknown
-        language: node
-        types_or: [yaml, markdown]
-        additional_dependencies: ["prettier@3.9.5"]

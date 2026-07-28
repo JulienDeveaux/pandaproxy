@@ -27,12 +27,16 @@ source = "vcs"
 version-file = "src/pandaproxy/_version.py"
 
 [dependency-groups]
-dev = [
-    "ruff>=0.15.0",
+lint = ["ruff>=0.15.0"]
+test = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-timeout>=2.3.0",
     "pytest-cov>=6.0.0",
+]
+dev = [
+    {include-group = "lint"},
+    {include-group = "test"},
 ]
 
 [tool.hatch.build.targets.wheel]

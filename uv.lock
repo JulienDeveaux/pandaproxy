@@ -298,6 +298,15 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ruff" },
 ]
+lint = [
+    { name = "ruff" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -314,6 +323,13 @@ dev = [
     { name = "pytest-cov", specifier = ">=6.0.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
     { name = "ruff", specifier = ">=0.15.0" },
+]
+lint = [{ name = "ruff", specifier = ">=0.15.0" }]
+test = [
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-cov", specifier = ">=6.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
 ]
 
 [[package]]
