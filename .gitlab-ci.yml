@@ -1,8 +1,13 @@
+variables:
+  PYTHON_VERSION: "3.14"
+  DOCKER_BUILD_ARGS: "--build-arg PYTHON_VERSION=${PYTHON_VERSION}"
+
 include:
-  - project: nerdycraft/shared-ci
-    ref: main
-    file:
-      - /templates/lint.yml
-      - /templates/test.yml
-      - /templates/docker.yml
-      - /templates/release-badge.yml
+  - component: ${CI_SERVER_FQDN}/nerdycraft/shared-ci/python@main
+    inputs:
+      image: ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-trixie
+  - component: ${CI_SERVER_FQDN}/nerdycraft/shared-ci/docker@main
+    inputs:
+      build-args: ${DOCKER_BUILD_ARGS}
+      test-command: "python -m pandaproxy --version"
+  - component: ${CI_SERVER_FQDN}/nerdycraft/shared-ci/release-badge@main

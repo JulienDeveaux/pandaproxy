@@ -20,6 +20,23 @@ from pandaproxy.protocol import CERT_FILENAME, KEY_FILENAME
 from pandaproxy.rtsp_proxy import RTSPProxy
 
 
+def resolve_file_env_var(var: str) -> None:
+    """Populate ``var`` from ``{var}_FILE`` if set and ``var`` itself isn't (Docker secrets convention)."""
+    if os.environ.get(var):
+        return
+    file_path = os.environ.get(f"{var}_FILE")
+    if file_path:
+        try:
+            os.environ[var] = Path(file_path).read_text().strip()
+        except FileNotFoundError:
+            raise RuntimeError(f"{var}_FILE points to a nonexistent file: {file_path}") from None
+        except OSError as e:
+            raise RuntimeError(f"Failed to read {var}_FILE ({file_path}): {e}") from e
+
+
+resolve_file_env_var("ACCESS_CODE")
+
+
 def version_callback(value: bool) -> None:
     """Print version and exit."""
     if value:
