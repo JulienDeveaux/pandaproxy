@@ -17,6 +17,9 @@ FROM base AS builder
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache \
+    uv sync --frozen --no-dev --no-install-project
+
 COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=bind,source=.git,target=/app/.git,readonly \
