@@ -10,4 +10,9 @@ include:
     inputs:
       build-args: ${DOCKER_BUILD_ARGS}
       test-command: "python -m pandaproxy --version"
+      rebuild-paths:
+        - pyproject.toml
+        - uv.lock
+        - src/**/*
+        - .gitlab-ci.yml
   - component: ${CI_SERVER_FQDN}/nerdycraft/shared-ci/release-badge@main
