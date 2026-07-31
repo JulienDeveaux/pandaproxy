@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG PYTHON_VERSION
-FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-trixie AS base
+FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-alpine AS base
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -14,28 +14,33 @@ ENV LANG=C.UTF-8 \
 
 FROM base AS builder
 
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    libffi-dev
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache \
     uv sync --frozen --no-dev --no-install-project
 
+ARG VERSION=0.0.0-dev
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION}
+
 COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=bind,source=.git,target=/app/.git,readonly \
     uv sync --frozen --no-dev
 
 
 FROM base
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+RUN apk add --no-cache \
     ffmpeg \
     openssl \
     curl \
     ca-certificates \
-    libcap2-bin \
+    libcap \
     bash
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -58,7 +63,7 @@ RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/python3.14 && \
     setcap 'cap_net_bind_service=+ep' /usr/local/bin/mediamtx
 
 ARG UID=10001
-RUN useradd -l -m -r -d /app -u "${UID}" appuser
+RUN adduser -D -H -h /app -u "${UID}" appuser
 USER appuser
 WORKDIR /app
 

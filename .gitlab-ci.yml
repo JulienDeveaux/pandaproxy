@@ -9,6 +9,7 @@ include:
   - component: ${CI_SERVER_FQDN}/nerdycraft/shared-ci/docker@main
     inputs:
       build-args: ${DOCKER_BUILD_ARGS}
+      version-build-arg: VERSION
       test-command: "python -m pandaproxy --version"
       rebuild-paths:
         - pyproject.toml
