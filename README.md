@@ -73,7 +73,7 @@ These services have limited simultaneous connection support. PandaProxy acts as 
 
 ```bash
 # Clone the repository
-git clone https://github.com/nerdycraft/pandaproxy.git
+git clone https://gitlab.com/nerdycraft/pandaproxy.git
 cd pandaproxy
 
 # Install with uv
@@ -258,12 +258,12 @@ lftp -u bblp,12345678 ftps://192.168.1.50:990
 ## Printer Model Support
 
 | Model                  | Camera          | MQTT | FTP |
-| ---------------------- | --------------- | ---- | --- |
-| X1, X1C, X1E           | RTSPS (:322)    | ✓    | ✓   |
-| H2C, H2D, H2D Pro, H2S | RTSPS (:322)    | ✓    | ✓   |
-| P2S                    | RTSPS (:322)    | ✓    | ✓   |
-| A1, A1 Mini            | Chamber (:6000) | ✓    | ✓   |
-| P1P, P1S               | Chamber (:6000) | ✓    | ✓   |
+|------------------------|-----------------|------|-----|
+| X1, X1C, X1E           | RTSPS (:322)    | ✓   | ✓  |
+| H2C, H2D, H2D Pro, H2S | RTSPS (:322)    | ✓   | ✓  |
+| P2S                    | RTSPS (:322)    | ✓   | ✓  |
+| A1, A1 Mini            | Chamber (:6000) | ✓   | ✓  |
+| P1P, P1S               | Chamber (:6000) | ✓   | ✓  |
 
 ## Troubleshooting
 
