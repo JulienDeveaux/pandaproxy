@@ -32,6 +32,7 @@ reader, writer = await asyncio.open_connection(host, port, ssl=ctx)
 ```python
 # CORRECT
 from pandaproxy.helper import close_writer
+
 await close_writer(writer)
 
 # WRONG - resource leak on SSL, may hang
@@ -82,6 +83,7 @@ async def run_upstream_loop(self):
         logger.debug("upstream loop cancelled")
     except Exception:
         logger.exception("Unexpected crash in upstream loop")
+
 
 # WRONG - unhandled exception kills the loop silently
 async def run_upstream_loop(self):

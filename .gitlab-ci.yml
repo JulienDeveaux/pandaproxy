@@ -1,14 +1,11 @@
 variables:
   PYTHON_VERSION: "3.14"
-  DOCKER_BUILD_ARGS: "--build-arg PYTHON_VERSION=${PYTHON_VERSION}"
 
 include:
-  - component: ${CI_SERVER_FQDN}/nerdycraft/shared-ci/python@main
+  - component: $CI_SERVER_FQDN/nerdycraft/shared-ci/python@main
+  - component: $CI_SERVER_FQDN/nerdycraft/shared-ci/docker@main
     inputs:
-      image: ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-trixie
-  - component: ${CI_SERVER_FQDN}/nerdycraft/shared-ci/docker@main
-    inputs:
-      build-args: ${DOCKER_BUILD_ARGS}
+      build-args: --build-arg PYTHON_VERSION=${PYTHON_VERSION}
       version-build-arg: VERSION
       test-command: "python -m pandaproxy --version"
       rebuild-paths:
@@ -16,4 +13,4 @@ include:
         - uv.lock
         - src/**/*
         - .gitlab-ci.yml
-  - component: ${CI_SERVER_FQDN}/nerdycraft/shared-ci/release-badge@main
+  - component: $CI_SERVER_FQDN/nerdycraft/shared-ci/release-badge@main

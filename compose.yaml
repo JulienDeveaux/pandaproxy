@@ -1,17 +1,16 @@
 services:
   pandaproxy:
-    image: registry.nerdycraft.de/nerdycraft/pandaproxy:latest
-    container_name: pandaproxy
+    image: registry.gitlab.com/nerdycraft/pandaproxy:latest
     restart: unless-stopped
-    env_file: .env
-    volumes:
-      - ./certs:/app/certs
+    cap_add:
+      - NET_BIND_SERVICE
     networks:
       pub_net:
         # Assign a static IP from your network that is not used by DHCP
         ipv4_address: ${PANDAPROXY_IP:-192.168.1.50}
-    cap_add:
-      - NET_BIND_SERVICE
+    env_file: .env
+    volumes:
+      - ./certs:/app/certs
 
 networks:
   pub_net:
