@@ -1,10 +1,15 @@
 """Async broadcast manager for fan-out streaming to multiple clients."""
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +19,9 @@ class StreamClient:
     """Represents a connected client with its own message queue."""
 
     client_id: str
-    queue: asyncio.Queue[bytes | list[bytes] | None] = field(default_factory=lambda: asyncio.Queue(maxsize=100))
+    queue: asyncio.Queue[bytes | list[bytes] | None] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=100)
+    )
     connected: bool = True
 
     async def send(self, data: bytes | list[bytes]) -> bool:
@@ -86,7 +93,12 @@ class StreamFanout:
 
             client = StreamClient(client_id=client_id)
             self._clients[client_id] = client
-            logger.info("[%s] Client %s connected (total: %d)", self.name, client_id, len(self._clients))
+            logger.info(
+                "[%s] Client %s connected (total: %d)",
+                self.name,
+                client_id,
+                len(self._clients),
+            )
             return client
 
     async def unregister_client(self, client: StreamClient) -> None:

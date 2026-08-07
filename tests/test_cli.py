@@ -40,17 +40,23 @@ def test_resolve_file_env_var_noop_when_neither_set(monkeypatch):
     assert "ACCESS_CODE" not in os.environ
 
 
-def test_resolve_file_env_var_raises_clear_error_when_file_missing(monkeypatch, tmp_path):
+def test_resolve_file_env_var_raises_clear_error_when_file_missing(
+    monkeypatch, tmp_path
+):
     monkeypatch.delenv("ACCESS_CODE", raising=False)
     monkeypatch.setenv("ACCESS_CODE_FILE", str(tmp_path / "does-not-exist"))
 
-    with pytest.raises(RuntimeError, match="ACCESS_CODE_FILE points to a nonexistent file"):
+    with pytest.raises(
+        RuntimeError, match="ACCESS_CODE_FILE points to a nonexistent file"
+    ):
         resolve_file_env_var("ACCESS_CODE")
 
     assert "ACCESS_CODE" not in os.environ
 
 
-def test_resolve_file_env_var_raises_clear_error_when_path_unreadable(monkeypatch, tmp_path):
+def test_resolve_file_env_var_raises_clear_error_when_path_unreadable(
+    monkeypatch, tmp_path
+):
     # A directory triggers the same OSError branch as a permission-denied file,
     # without depending on the test runner not being root (CI runs as root).
     monkeypatch.delenv("ACCESS_CODE", raising=False)
@@ -82,12 +88,16 @@ def test_module_import_resolves_access_code_file(monkeypatch, tmp_path):
         importlib.reload(pandaproxy.cli)
 
 
-def test_module_import_raises_clear_error_when_access_code_file_missing(monkeypatch, tmp_path):
+def test_module_import_raises_clear_error_when_access_code_file_missing(
+    monkeypatch, tmp_path
+):
     monkeypatch.delenv("ACCESS_CODE", raising=False)
     monkeypatch.setenv("ACCESS_CODE_FILE", str(tmp_path / "does-not-exist"))
 
     try:
-        with pytest.raises(RuntimeError, match="ACCESS_CODE_FILE points to a nonexistent file"):
+        with pytest.raises(
+            RuntimeError, match="ACCESS_CODE_FILE points to a nonexistent file"
+        ):
             importlib.reload(pandaproxy.cli)
     finally:
         monkeypatch.delenv("ACCESS_CODE_FILE", raising=False)

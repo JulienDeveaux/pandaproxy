@@ -10,12 +10,14 @@ Protocol details:
 - Response: 16-byte header + JPEG data, continuously streamed
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
 import ssl
 import struct
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pandaproxy.fanout import StreamFanout
 from pandaproxy.helper import (
@@ -24,7 +26,10 @@ from pandaproxy.helper import (
     create_ssl_context,
     parse_auth_payload,
 )
-from pandaproxy.protocol import CHAMBER_PORT, MAX_PAYLOAD_SIZE
+from pandaproxy.protocol import CHAMBER_PORT, MAX_PAYLOAD_SIZE, PRINTER_CERT_FILENAME
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +60,7 @@ class ChamberImageProxy:
         cert_path: Path,
         key_path: Path,
         bind_address: str = "0.0.0.0",  # noqa: S104  # pandaproxy binds all interfaces by design
+        printer_cert_path: Path | str = PRINTER_CERT_FILENAME,
     ) -> None:
         self.printer_ip = printer_ip
         self.access_code = access_code
@@ -68,41 +74,40 @@ class ChamberImageProxy:
         self._server: asyncio.Server | None = None
         self._running = False
         self._upstream_connected = asyncio.Event()
-        self._ssl_context = create_ssl_context()
+        self._ssl_context = create_ssl_context(printer_cert_path)
 
     async def start(self) -> None:
         """Start the chamber image proxy server."""
-        logger.info("Starting chamber image proxy on %s:%d", self.bind_address, self.port)
+        logger.info(
+            "Starting chamber image proxy on %s:%d", self.bind_address, self.port
+        )
         self._running = True
-
         if not self.cert_path.exists() or not self.key_path.exists():
             raise FileNotFoundError(
                 f"TLS certificates not found at {self.cert_path} or {self.key_path}. "
                 "Please ensure the CLI entry point has generated them."
             )
-
         server_ssl = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         server_ssl.load_cert_chain(self.cert_path, self.key_path)
-
         self._server = await asyncio.start_server(
             self._handle_client,
             self.bind_address,
             self.port,
             ssl=server_ssl,
         )
-        logger.info("Chamber image proxy listening on %s:%d (TLS)", self.bind_address, self.port)
+        logger.info(
+            "Chamber image proxy listening on %s:%d (TLS)", self.bind_address, self.port
+        )
 
     async def stop(self) -> None:
         """Stop the chamber image proxy server."""
         logger.info("Stopping chamber image proxy")
         self._running = False
         self._fanout.stop()
-
         if self._upstream_task:
             self._upstream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._upstream_task
-
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -114,23 +119,29 @@ class ChamberImageProxy:
         It must never exit silently - any unexpected crash is logged and retried.
         """
         self._upstream_task = asyncio.current_task()
+        # noinspection broad-exception
         try:
             await self._upstream_connection_loop()
             logger.info("Upstream loop exited normally")
         except asyncio.CancelledError:
             logger.debug("Upstream loop cancelled")
         except Exception:
+            # Broad by design: this background task must never die silently (see
+            # docstring). _upstream_connection_loop already handles all expected
+            # failure modes internally; this is the last-resort guard against bugs
+            # or unanticipated exceptions escaping it.
             logger.exception("Upstream loop crashed unexpectedly")
 
     async def _upstream_connection_loop(self) -> None:
         """Maintain connection to printer chamber image stream, reconnecting on failure."""
         while self._running:
-            reader: asyncio.StreamReader | None = None
             writer: asyncio.StreamWriter | None = None
-
             try:
-                logger.info("Connecting to printer chamber image at %s:%d", self.printer_ip, self.port)
-
+                logger.info(
+                    "Connecting to printer chamber image at %s:%d",
+                    self.printer_ip,
+                    self.port,
+                )
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(
                         self.printer_ip,
@@ -140,25 +151,27 @@ class ChamberImageProxy:
                     timeout=UPSTREAM_CONNECT_TIMEOUT,
                 )
 
+                if not reader or not writer:
+                    logger.error("Failed to establish connection to printer")
+                    await asyncio.sleep(5)
+                    continue
                 logger.info("Connected to printer chamber image stream")
-
                 # Send authentication
                 auth_payload = create_auth_payload(self.access_code)
                 writer.write(auth_payload)
                 await writer.drain()
                 logger.debug("Sent authentication payload")
-
                 self._fanout.start()
                 self._upstream_connected.set()
-
                 # Continuously read frames and broadcast
                 while self._running:
                     # Read 16-byte header
-                    header = await asyncio.wait_for(reader.readexactly(16), timeout=UPSTREAM_READ_TIMEOUT)
+                    header = await asyncio.wait_for(
+                        reader.readexactly(16), timeout=UPSTREAM_READ_TIMEOUT
+                    )
 
                     # Parse payload size (little-endian uint32 at offset 0)
                     payload_size = struct.unpack("<I", header[0:4])[0]
-
                     if payload_size == 0 or payload_size > MAX_PAYLOAD_SIZE:
                         logger.error("Invalid payload size: %d", payload_size)
                         break
@@ -171,14 +184,16 @@ class ChamberImageProxy:
 
                     # Broadcast header + jpeg to all clients (same format as printer sends)
                     await self._fanout.broadcast([header, jpeg_data])
-
             except asyncio.CancelledError:
                 logger.debug("Upstream connection cancelled")
                 raise  # Let CancelledError propagate for clean shutdown
             except TimeoutError:
                 logger.warning("Upstream connection timeout")
             except asyncio.IncompleteReadError as e:
-                logger.warning("Upstream connection closed: incomplete read (%d bytes)", len(e.partial))
+                logger.warning(
+                    "Upstream connection closed: incomplete read (%d bytes)",
+                    len(e.partial),
+                )
             except ConnectionRefusedError:
                 logger.error("Connection refused by printer")
             except ssl.SSLError as e:
@@ -190,10 +205,8 @@ class ChamberImageProxy:
             finally:
                 self._upstream_connected.clear()
                 self._fanout.stop()
-
                 if writer:
                     await close_writer(writer)
-
             if self._running:
                 logger.info("Reconnecting to printer in 5 seconds...")
                 await asyncio.sleep(5)
@@ -206,11 +219,12 @@ class ChamberImageProxy:
         """Handle an incoming client connection."""
         client_addr = writer.get_extra_info("peername")
         logger.info("Client connected from %s", client_addr)
-
         try:
             # Wait for client to send 80-byte auth payload
             try:
-                auth_data = await asyncio.wait_for(reader.readexactly(80), timeout=CLIENT_AUTH_TIMEOUT)
+                auth_data = await asyncio.wait_for(
+                    reader.readexactly(80), timeout=CLIENT_AUTH_TIMEOUT
+                )
             except TimeoutError:
                 logger.warning("Client %s auth timeout", client_addr)
                 return
@@ -225,19 +239,22 @@ class ChamberImageProxy:
                 return
 
             logger.info("Client %s authenticated", client_addr)
-
             # Wait for upstream to be connected
             if not self._upstream_connected.is_set():
                 logger.info("Waiting for upstream connection...")
                 try:
-                    await asyncio.wait_for(self._upstream_connected.wait(), timeout=CLIENT_UPSTREAM_WAIT_TIMEOUT)
+                    await asyncio.wait_for(
+                        self._upstream_connected.wait(),
+                        timeout=CLIENT_UPSTREAM_WAIT_TIMEOUT,
+                    )
                 except TimeoutError:
-                    logger.warning("Upstream connection timeout for client %s", client_addr)
+                    logger.warning(
+                        "Upstream connection timeout for client %s", client_addr
+                    )
                     return
 
             # Register client with fanout
             client = await self._fanout.register_client(str(client_addr))
-
             try:
                 # Send frames to client
                 while self._running and client.connected:
@@ -252,11 +269,10 @@ class ChamberImageProxy:
                         else:
                             writer.write(data)
                             await writer.drain()
-                    except (ConnectionResetError, BrokenPipeError):
+                    except ConnectionResetError, BrokenPipeError:
                         break
             finally:
                 await self._fanout.unregister_client(client)
-
         except Exception as e:
             logger.error("Client %s error: %s", client_addr, e)
         finally:

@@ -1,5 +1,7 @@
 """CLI entry point for PandaProxy."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
@@ -16,7 +18,7 @@ from pandaproxy.detection import detect_camera_type
 from pandaproxy.ftp_proxy import FTPProxy
 from pandaproxy.helper import generate_self_signed_cert
 from pandaproxy.mqtt_proxy import MQTTProxy
-from pandaproxy.protocol import CERT_FILENAME, KEY_FILENAME
+from pandaproxy.protocol import CERT_FILENAME, KEY_FILENAME, PRINTER_CERT_FILENAME
 from pandaproxy.rtsp_proxy import RTSPProxy
 
 
@@ -29,7 +31,9 @@ def resolve_file_env_var(var: str) -> None:
         try:
             os.environ[var] = Path(file_path).read_text().strip()
         except FileNotFoundError:
-            raise RuntimeError(f"{var}_FILE points to a nonexistent file: {file_path}") from None
+            raise RuntimeError(
+                f"{var}_FILE points to a nonexistent file: {file_path}"
+            ) from None
         except OSError as e:
             raise RuntimeError(f"Failed to read {var}_FILE ({file_path}): {e}") from e
 
@@ -59,7 +63,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def check_dependencies(services: set[str], camera_type: str | None) -> tuple[bool, list[str]]:
+def check_dependencies(
+    services: set[str], camera_type: str | None
+) -> tuple[bool, list[str]]:
     """Check for required external dependencies based on enabled services."""
     missing = []
 
@@ -88,7 +94,9 @@ def parse_services(services_str: str | None, enable_all: bool) -> set[str]:
     # Validate service names
     invalid = services - all_services
     if invalid:
-        raise typer.BadParameter(f"Invalid service(s): {', '.join(invalid)}. Valid services: {', '.join(all_services)}")
+        raise typer.BadParameter(
+            f"Invalid service(s): {', '.join(invalid)}. Valid services: {', '.join(all_services)}"
+        )
 
     return services
 
@@ -120,6 +128,7 @@ async def run_proxy(
     bind: str,
     services: set[str],
     camera_type: str | None,
+    printer_cert_path: Path,
 ) -> None:
     """Run the proxy servers based on enabled services."""
     chamber_proxy: ChamberImageProxy | None = None
@@ -170,6 +179,7 @@ async def run_proxy(
                     cert_path=cert_path,
                     key_path=key_path,
                     bind_address=bind,
+                    printer_cert_path=printer_cert_path,
                 )
             elif camera_type == "rtsp":
                 rtsp_proxy = RTSPProxy(
@@ -189,6 +199,7 @@ async def run_proxy(
                 cert_path=cert_path,
                 key_path=key_path,
                 bind_address=bind,
+                printer_cert_path=printer_cert_path,
             )
 
         # Instantiate FTP proxy if enabled
@@ -216,7 +227,9 @@ async def run_proxy(
         # IMPORTANT: Background tasks must be created AFTER start() completes
         # because they depend on _running being True (set in start())
         if chamber_proxy:
-            background_tasks.append(asyncio.create_task(chamber_proxy.run_upstream_loop()))
+            background_tasks.append(
+                asyncio.create_task(chamber_proxy.run_upstream_loop())
+            )
         if rtsp_proxy:
             background_tasks.append(asyncio.create_task(rtsp_proxy.run_monitor_loop()))
         if mqtt_proxy:
@@ -331,6 +344,14 @@ def main(
             envvar="ENABLE_ALL",
         ),
     ] = False,
+    cert: Annotated[
+        Path,
+        typer.Option(
+            "--cert",
+            help="Path to the printer's CA certificate used to verify TLS connections",
+            envvar="PRINTER_CERT",
+        ),
+    ] = Path(PRINTER_CERT_FILENAME),
     verbose: Annotated[
         bool,
         typer.Option(
@@ -390,21 +411,32 @@ def main(
     camera_type: str | None = None
     if "camera" in enabled_services:
         try:
-            camera_type = asyncio.run(detect_camera_type(printer_ip, access_code))
-            typer.echo(f"Detected camera type: {camera_type.upper()}")
+            camera_type = asyncio.run(detect_camera_type(printer_ip, access_code, cert))
+            if camera_type:
+                typer.echo(f"Detected camera type: {camera_type.upper()}")
+            else:
+                typer.echo(
+                    "Warning: Could not detect camera type. Camera service will be disabled.",
+                    err=True,
+                )
+                enabled_services.discard("camera")
         except RuntimeError as e:
             typer.echo(f"Warning: Could not detect camera type: {e}", err=True)
             typer.echo("Camera service will be disabled.", err=True)
             enabled_services.discard("camera")
 
     # Check dependencies for enabled services
-    dependencies_satisfied, dependencies_missing = check_dependencies(enabled_services, camera_type)
+    dependencies_satisfied, dependencies_missing = check_dependencies(
+        enabled_services, camera_type
+    )
     if not dependencies_satisfied:
         typer.echo("Error: Missing required dependencies:", err=True)
         for dep in dependencies_missing:
             if dep == "ffmpeg":
                 typer.echo("  - ffmpeg: Install via your package manager", err=True)
-                typer.echo("      Linux: apt install ffmpeg / pacman -S ffmpeg", err=True)
+                typer.echo(
+                    "      Linux: apt install ffmpeg / pacman -S ffmpeg", err=True
+                )
                 typer.echo("      macOS: brew install ffmpeg", err=True)
             elif dep == "mediamtx":
                 typer.echo(
@@ -428,6 +460,7 @@ def main(
             bind=bind,
             services=enabled_services,
             camera_type=camera_type,
+            printer_cert_path=cert,
         )
     )
 

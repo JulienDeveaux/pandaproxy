@@ -10,7 +10,6 @@ from pandaproxy.helper import generate_self_signed_cert
 from pandaproxy.rtsp_proxy import (
     MEDIAMTX_CONFIG_TEMPLATE,
     RTSPProxy,
-    check_dependencies,
 )
 
 
@@ -43,57 +42,6 @@ def mock_subprocess():
     proc.returncode = None
     proc.wait = AsyncMock()
     return proc
-
-
-class TestCheckDependencies:
-    """Tests for check_dependencies function."""
-
-    def test_returns_tuple(self):
-        """Should return a tuple of (bool, list)."""
-        result = check_dependencies()
-        assert isinstance(result, tuple)
-        assert len(result) == 2
-        assert isinstance(result[0], bool)
-        assert isinstance(result[1], list)
-
-    def test_detects_missing_ffmpeg(self):
-        """Should detect when ffmpeg is missing."""
-        with patch("shutil.which") as mock_which:
-            mock_which.side_effect = lambda cmd: None if cmd == "ffmpeg" else "/usr/bin/mediamtx"
-
-            ok, missing = check_dependencies()
-
-            assert ok is False
-            assert "ffmpeg" in missing
-            assert "mediamtx" not in missing
-
-    def test_detects_missing_mediamtx(self):
-        """Should detect when mediamtx is missing."""
-        with patch("shutil.which") as mock_which:
-            mock_which.side_effect = lambda cmd: None if cmd == "mediamtx" else "/usr/bin/ffmpeg"
-
-            ok, missing = check_dependencies()
-
-            assert ok is False
-            assert "mediamtx" in missing
-            assert "ffmpeg" not in missing
-
-    def test_detects_both_missing(self):
-        """Should detect when both dependencies are missing."""
-        with patch("shutil.which", return_value=None):
-            ok, missing = check_dependencies()
-
-            assert ok is False
-            assert "ffmpeg" in missing
-            assert "mediamtx" in missing
-
-    def test_returns_ok_when_both_present(self):
-        """Should return ok when both dependencies are present."""
-        with patch("shutil.which", return_value="/usr/bin/mock"):
-            ok, missing = check_dependencies()
-
-            assert ok is True
-            assert missing == []
 
 
 class TestMediaMTXConfigTemplate:
@@ -192,30 +140,8 @@ class TestRTSPProxyLifecycle:
     """Tests for RTSPProxy start/stop lifecycle."""
 
     @pytest.mark.asyncio
-    async def test_start_raises_if_dependencies_missing(self, temp_certs):
-        """Start should raise if ffmpeg or mediamtx is missing."""
-        cert_path, key_path = temp_certs
-
-        proxy = RTSPProxy(
-            printer_ip="192.168.1.100",
-            access_code="testcode",
-            cert_path=cert_path,
-            key_path=key_path,
-        )
-
-        with patch("pandaproxy.rtsp_proxy.check_dependencies", return_value=(False, ["ffmpeg", "mediamtx"])):
-            with pytest.raises(RuntimeError) as exc_info:
-                await proxy.start()
-
-            assert "Missing required dependencies" in str(exc_info.value)
-            assert "ffmpeg" in str(exc_info.value)
-            assert "mediamtx" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_start_raises_if_certs_missing(self, temp_certs):
+    async def test_start_raises_if_certs_missing(self):
         """Start should raise if certificate files don't exist."""
-        cert_path, key_path = temp_certs
-
         proxy = RTSPProxy(
             printer_ip="192.168.1.100",
             access_code="testcode",
@@ -223,10 +149,7 @@ class TestRTSPProxyLifecycle:
             key_path=Path("/nonexistent/key.key"),
         )
 
-        with (
-            patch("pandaproxy.rtsp_proxy.check_dependencies", return_value=(True, [])),
-            pytest.raises(FileNotFoundError),
-        ):
+        with pytest.raises(FileNotFoundError):
             await proxy.start()
 
     @pytest.mark.asyncio
@@ -242,7 +165,6 @@ class TestRTSPProxyLifecycle:
         )
 
         with (
-            patch("pandaproxy.rtsp_proxy.check_dependencies", return_value=(True, [])),
             patch("asyncio.create_subprocess_exec", return_value=mock_subprocess),
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
@@ -266,7 +188,6 @@ class TestRTSPProxyLifecycle:
         )
 
         with (
-            patch("pandaproxy.rtsp_proxy.check_dependencies", return_value=(True, [])),
             patch("asyncio.create_subprocess_exec", return_value=mock_subprocess),
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):

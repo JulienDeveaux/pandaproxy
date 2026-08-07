@@ -5,6 +5,7 @@ import ssl
 import struct
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -379,6 +380,18 @@ class TestMQTTProxyClientHandling:
                 await writer.wait_closed()
         finally:
             await proxy.stop()
+
+    @pytest.mark.asyncio
+    async def test_send_loop_returns_cleanly_on_connection_reset(self):
+        """_client_send_loop should log and return, not crash, when the write fails."""
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        await queue.put(b"packet-data")
+        writer = MagicMock()
+        writer.write = MagicMock(side_effect=ConnectionResetError)
+        writer.drain = AsyncMock()
+
+        # Should not raise
+        await MQTTProxy._client_send_loop("client-1", queue, writer)
 
 
 class TestMQTTProxyBroadcast:

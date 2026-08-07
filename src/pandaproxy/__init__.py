@@ -4,4 +4,6 @@ A transparent proxy that maintains a single connection to BambuLab printer
 camera streams and serves multiple clients via the same protocols.
 """
 
-__version__ = "0.1.0"
+from pandaproxy._version import version
+
+__version__ = version

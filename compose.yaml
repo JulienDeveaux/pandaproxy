@@ -4,6 +4,15 @@ services:
     restart: unless-stopped
     cap_add:
       - NET_BIND_SERVICE
+    ports:
+      # RTSP camera stream (X1/H2/P2 printers)
+      - "322:322/tcp"
+      # FTP (file uploads)
+      - "990:990/tcp"
+      # Chamber image stream (A1/P1 printers)
+      - "6000:6000/tcp"
+      # MQTT (printer control and status)
+      - "8883:8883/tcp"
     networks:
       pub_net:
         # Assign a static IP from your network that is not used by DHCP

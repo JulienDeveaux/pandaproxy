@@ -117,7 +117,9 @@ async def read_packet(reader: asyncio.StreamReader) -> MQTTPacket:
         if multiplier > 128**3:
             raise ValueError("Malformed remaining length in MQTT packet")
 
-    payload = await reader.readexactly(remaining_length) if remaining_length > 0 else b""
+    payload = (
+        await reader.readexactly(remaining_length) if remaining_length > 0 else b""
+    )
 
     return MQTTPacket(packet_type=packet_type, flags=flags, payload=payload)
 
@@ -133,7 +135,9 @@ def _build_packet(packet_type: int, flags: int, payload: bytes) -> bytes:
     return bytes([first_byte]) + _encode_remaining_length(len(payload)) + payload
 
 
-def build_connack(return_code: int = CONNACK_ACCEPTED, session_present: bool = False) -> bytes:
+def build_connack(
+    return_code: int = CONNACK_ACCEPTED, session_present: bool = False
+) -> bytes:
     """Build a CONNACK packet."""
     flags = 0x01 if session_present else 0x00
     return _build_packet(PacketType.CONNACK, 0, bytes([flags, return_code]))
@@ -141,7 +145,9 @@ def build_connack(return_code: int = CONNACK_ACCEPTED, session_present: bool = F
 
 def build_suback(packet_id: int, return_codes: list[int]) -> bytes:
     """Build a SUBACK packet."""
-    return _build_packet(PacketType.SUBACK, 0, struct.pack(">H", packet_id) + bytes(return_codes))
+    return _build_packet(
+        PacketType.SUBACK, 0, struct.pack(">H", packet_id) + bytes(return_codes)
+    )
 
 
 def build_unsuback(packet_id: int) -> bytes:
@@ -159,7 +165,9 @@ def build_pingresp() -> bytes:
     return _build_packet(PacketType.PINGRESP, 0, b"")
 
 
-def build_publish(topic: str, payload: bytes, qos: int = 0, packet_id: int = 0) -> bytes:
+def build_publish(
+    topic: str, payload: bytes, qos: int = 0, packet_id: int = 0
+) -> bytes:
     """Build a PUBLISH packet for fan-out to clients."""
     flags = (qos & 0x03) << 1
     data = bytearray()
@@ -175,6 +183,37 @@ def build_publish(topic: str, payload: bytes, qos: int = 0, packet_id: int = 0) 
 # ---------------------------------------------------------------------------
 # Packet parsers (client -> proxy)
 # ---------------------------------------------------------------------------
+
+
+def _read_string(data: bytes, offset: int, error_prefix: str) -> tuple[str, int]:
+    """Read a length-prefixed UTF-8 string. Returns (value, new_offset).
+
+    Raises:
+        ValueError: If the declared length exceeds the remaining payload.
+    """
+    length = struct.unpack_from(">H", data, offset)[0]
+    offset += 2
+    if offset + length > len(data):
+        raise ValueError(
+            f"{error_prefix}: string length {length} exceeds remaining payload"
+        )
+    value = data[offset : offset + length].decode("utf-8")
+    return value, offset + length
+
+
+def _skip_string(data: bytes, offset: int, error_prefix: str) -> int:
+    """Skip a length-prefixed field without decoding it (e.g. binary payloads). Returns new_offset.
+
+    Raises:
+        ValueError: If the declared length exceeds the remaining payload.
+    """
+    length = struct.unpack_from(">H", data, offset)[0]
+    offset += 2
+    if offset + length > len(data):
+        raise ValueError(
+            f"{error_prefix}: field length {length} exceeds remaining payload"
+        )
+    return offset + length
 
 
 def parse_connect(data: bytes) -> ConnectInfo:
@@ -212,33 +251,23 @@ def parse_connect(data: bytes) -> ConnectInfo:
         offset += 2
 
         # Client ID
-        cid_len = struct.unpack_from(">H", data, offset)[0]
-        offset += 2
-        client_id = data[offset : offset + cid_len].decode("utf-8")
-        offset += cid_len
+        client_id, offset = _read_string(data, offset, "Malformed CONNECT packet")
 
         # Will Topic + Will Message (skip if present, comes before username/password)
+        # Will Message is an arbitrary binary payload, so it's skipped, not decoded.
         if has_will:
-            will_topic_len = struct.unpack_from(">H", data, offset)[0]
-            offset += 2 + will_topic_len
-            will_msg_len = struct.unpack_from(">H", data, offset)[0]
-            offset += 2 + will_msg_len
+            offset = _skip_string(data, offset, "Malformed CONNECT packet")
+            offset = _skip_string(data, offset, "Malformed CONNECT packet")
 
         # Username (optional)
         username = None
         if has_username:
-            ulen = struct.unpack_from(">H", data, offset)[0]
-            offset += 2
-            username = data[offset : offset + ulen].decode("utf-8")
-            offset += ulen
+            username, offset = _read_string(data, offset, "Malformed CONNECT packet")
 
         # Password (optional)
         password = None
         if has_password:
-            plen = struct.unpack_from(">H", data, offset)[0]
-            offset += 2
-            password = data[offset : offset + plen].decode("utf-8")
-            offset += plen
+            password, offset = _read_string(data, offset, "Malformed CONNECT packet")
 
         return ConnectInfo(
             client_id=client_id,
@@ -264,12 +293,7 @@ def parse_subscribe(data: bytes) -> tuple[int, list[tuple[str, int]]]:
 
         topics: list[tuple[str, int]] = []
         while offset < len(data):
-            tlen = struct.unpack_from(">H", data, offset)[0]
-            offset += 2
-            if offset + tlen > len(data):
-                raise ValueError(f"Malformed SUBSCRIBE packet: topic length {tlen} exceeds remaining payload")
-            topic = data[offset : offset + tlen].decode("utf-8")
-            offset += tlen
+            topic, offset = _read_string(data, offset, "Malformed SUBSCRIBE packet")
             qos = data[offset]
             offset += 1
             topics.append((topic, qos))
@@ -292,12 +316,7 @@ def parse_unsubscribe(data: bytes) -> tuple[int, list[str]]:
 
         topics: list[str] = []
         while offset < len(data):
-            tlen = struct.unpack_from(">H", data, offset)[0]
-            offset += 2
-            if offset + tlen > len(data):
-                raise ValueError(f"Malformed UNSUBSCRIBE packet: topic length {tlen} exceeds remaining payload")
-            topic = data[offset : offset + tlen].decode("utf-8")
-            offset += tlen
+            topic, offset = _read_string(data, offset, "Malformed UNSUBSCRIBE packet")
             topics.append(topic)
 
         return packet_id, topics
@@ -315,18 +334,15 @@ def parse_publish(flags: int, data: bytes) -> PublishInfo:
         offset = 0
         qos = (flags >> 1) & 0x03
 
-        topic_len = struct.unpack_from(">H", data, offset)[0]
-        offset += 2
-        if offset + topic_len > len(data):
-            raise ValueError(f"Malformed PUBLISH packet: topic length {topic_len} exceeds remaining payload")
-        topic = data[offset : offset + topic_len].decode("utf-8")
-        offset += topic_len
+        topic, offset = _read_string(data, offset, "Malformed PUBLISH packet")
 
         packet_id = None
         if qos > 0:
             packet_id = struct.unpack_from(">H", data, offset)[0]
             offset += 2
 
-        return PublishInfo(topic=topic, payload=data[offset:], qos=qos, packet_id=packet_id)
+        return PublishInfo(
+            topic=topic, payload=data[offset:], qos=qos, packet_id=packet_id
+        )
     except (struct.error, IndexError, UnicodeDecodeError) as e:
         raise ValueError(f"Malformed PUBLISH packet: {e}") from e

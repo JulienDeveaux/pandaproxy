@@ -4,10 +4,12 @@ Detects whether a printer uses RTSP (port 322) or Chamber Image (port 6000)
 protocol by probing both endpoints.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
-import ssl
 import struct
+from typing import TYPE_CHECKING
 
 from pandaproxy.helper import (
     close_writer,
@@ -15,7 +17,16 @@ from pandaproxy.helper import (
     create_ssl_context,
     open_connection_safe,
 )
-from pandaproxy.protocol import CHAMBER_PORT, MAX_PAYLOAD_SIZE, RTSP_PORT
+from pandaproxy.protocol import (
+    CHAMBER_PORT,
+    MAX_PAYLOAD_SIZE,
+    PRINTER_CERT_FILENAME,
+    RTSP_PORT,
+)
+
+if TYPE_CHECKING:
+    import ssl
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +34,19 @@ logger = logging.getLogger(__name__)
 DETECT_TIMEOUT = 5.0
 
 
-async def _probe_chamber_port(ip: str, access_code: str, ssl_context: ssl.SSLContext) -> bool:
+async def _probe_chamber_port(
+    ip: str, access_code: str, ssl_context: ssl.SSLContext
+) -> bool:
     """Probe the chamber image port (6000) to see if it responds.
 
     Returns True if the printer responds to the chamber image protocol.
     """
     result = await open_connection_safe(
-        ip, CHAMBER_PORT, ssl_context=ssl_context, timeout=DETECT_TIMEOUT, name=f"chamber port {CHAMBER_PORT}"
+        ip,
+        CHAMBER_PORT,
+        ssl_context=ssl_context,
+        timeout=DETECT_TIMEOUT,
+        name=f"chamber port {CHAMBER_PORT}",
     )
     if result is None:
         return False
@@ -48,7 +65,9 @@ async def _probe_chamber_port(ip: str, access_code: str, ssl_context: ssl.SSLCon
             # Check if we got a valid payload size
             payload_size = struct.unpack("<I", header[0:4])[0]
             if 0 < payload_size < MAX_PAYLOAD_SIZE:
-                logger.debug("Chamber image protocol detected (payload size: %d)", payload_size)
+                logger.debug(
+                    "Chamber image protocol detected (payload size: %d)", payload_size
+                )
                 return True
 
     except (TimeoutError, OSError) as e:
@@ -65,7 +84,11 @@ async def _probe_rtsp_port(ip: str, ssl_context: ssl.SSLContext) -> bool:
     Returns True if the printer has an open RTSPS port.
     """
     result = await open_connection_safe(
-        ip, RTSP_PORT, ssl_context=ssl_context, timeout=DETECT_TIMEOUT, name=f"RTSP port {RTSP_PORT}"
+        ip,
+        RTSP_PORT,
+        ssl_context=ssl_context,
+        timeout=DETECT_TIMEOUT,
+        name=f"RTSP port {RTSP_PORT}",
     )
     if result is None:
         return False
@@ -96,12 +119,15 @@ async def _probe_rtsp_port(ip: str, ssl_context: ssl.SSLContext) -> bool:
     return False
 
 
-async def detect_camera_type(ip: str, access_code: str) -> str:
+async def detect_camera_type(
+    ip: str, access_code: str, printer_cert_path: Path | str = PRINTER_CERT_FILENAME
+) -> str:
     """Detect the camera stream type for a BambuLab printer.
 
     Args:
         ip: IP address of the printer
         access_code: Access code for authentication
+        printer_cert_path: Path to the printer CA certificate used to verify the connection
 
     Returns:
         "chamber" for A1/P1 printers (port 6000)
@@ -113,7 +139,7 @@ async def detect_camera_type(ip: str, access_code: str) -> str:
     logger.info("Detecting camera type for printer at %s...", ip)
 
     # Build one SSL context shared by both probes (both verify the same printer.cer)
-    ssl_context = create_ssl_context()
+    ssl_context = create_ssl_context(printer_cert_path)
 
     # Probe both ports concurrently
     chamber_result, rtsp_result = await asyncio.gather(

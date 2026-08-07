@@ -4,6 +4,7 @@ import asyncio
 import ssl
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -164,7 +165,9 @@ class TestChamberImageProxyClientHandling:
             client_ctx.verify_mode = ssl.CERT_NONE
 
             # Connect with wrong auth
-            reader, writer = await asyncio.open_connection("127.0.0.1", port, ssl=client_ctx)
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", port, ssl=client_ctx
+            )
 
             try:
                 # Send wrong access code
@@ -205,7 +208,9 @@ class TestChamberImageProxyClientHandling:
             client_ctx.check_hostname = False
             client_ctx.verify_mode = ssl.CERT_NONE
 
-            reader, writer = await asyncio.open_connection("127.0.0.1", port, ssl=client_ctx)
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", port, ssl=client_ctx
+            )
 
             try:
                 # Send correct access code
@@ -223,3 +228,35 @@ class TestChamberImageProxyClientHandling:
 
         finally:
             await proxy.stop()
+
+    @pytest.mark.asyncio
+    async def test_send_loop_breaks_cleanly_on_connection_reset(self, temp_certs):
+        """Send loop should break (not crash) when the client write fails."""
+        cert_path, key_path = temp_certs
+
+        proxy = ChamberImageProxy(
+            printer_ip="192.168.1.100",
+            access_code="correctcode",
+            cert_path=cert_path,
+            key_path=key_path,
+        )
+        proxy._upstream_connected.set()
+        proxy._fanout.start()
+        proxy._running = True
+
+        reader = AsyncMock()
+        reader.readexactly = AsyncMock(return_value=create_auth_payload("correctcode"))
+        writer = MagicMock()
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock(side_effect=ConnectionResetError)
+        writer.drain = AsyncMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        handle_task = asyncio.create_task(proxy._handle_client(reader, writer))
+        await asyncio.sleep(0.05)  # let the handler register with the fanout
+        await proxy._fanout.broadcast(b"frame-data")
+
+        # Should complete cleanly, not hang or raise
+        await asyncio.wait_for(handle_task, timeout=2.0)
+        writer.close.assert_called_once()

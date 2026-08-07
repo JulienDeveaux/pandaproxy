@@ -184,6 +184,27 @@ class TestCreateSslContext:
         # We just verify it's a valid context
         assert ctx is not None
 
+    def test_accepts_custom_cert_path(self):
+        """Should load the CA cert from an explicitly provided path, not the default."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cert_path = Path(tmpdir) / "custom.crt"
+            key_path = Path(tmpdir) / "custom.key"
+            generate_self_signed_cert(
+                common_name="CustomCN",
+                san_dns=["localhost"],
+                san_ips=["127.0.0.1"],
+                output_cert=cert_path,
+                output_key=key_path,
+            )
+
+            ctx = create_ssl_context(cert_path)
+            assert isinstance(ctx, ssl.SSLContext)
+
+    def test_raises_for_missing_custom_cert_path(self):
+        """Should propagate the given path instead of silently using the default."""
+        with pytest.raises(FileNotFoundError):
+            create_ssl_context("/nonexistent/custom.cer")
+
 
 class TestOpenConnectionSafe:
     """Tests for open_connection_safe function."""
@@ -193,7 +214,10 @@ class TestOpenConnectionSafe:
         """Should return (reader, writer) when connection succeeds."""
         reader = AsyncMock()
         writer = AsyncMock()
-        with patch("pandaproxy.helper.asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))):
+        with patch(
+            "pandaproxy.helper.asyncio.open_connection",
+            new=AsyncMock(return_value=(reader, writer)),
+        ):
             result = await open_connection_safe("192.168.1.1", 6000)
         assert result == (reader, writer)
 
@@ -202,7 +226,10 @@ class TestOpenConnectionSafe:
         """Should return None and not raise on TimeoutError."""
         with (
             patch("pandaproxy.helper.asyncio.open_connection", new_callable=MagicMock),
-            patch("pandaproxy.helper.asyncio.wait_for", new=AsyncMock(side_effect=TimeoutError())),
+            patch(
+                "pandaproxy.helper.asyncio.wait_for",
+                new=AsyncMock(side_effect=TimeoutError()),
+            ),
         ):
             result = await open_connection_safe("192.168.1.1", 6000)
         assert result is None
@@ -212,7 +239,10 @@ class TestOpenConnectionSafe:
         """Should return None and not raise on ConnectionRefusedError."""
         with (
             patch("pandaproxy.helper.asyncio.open_connection", new_callable=MagicMock),
-            patch("pandaproxy.helper.asyncio.wait_for", new=AsyncMock(side_effect=ConnectionRefusedError())),
+            patch(
+                "pandaproxy.helper.asyncio.wait_for",
+                new=AsyncMock(side_effect=ConnectionRefusedError()),
+            ),
         ):
             result = await open_connection_safe("192.168.1.1", 6000)
         assert result is None
@@ -222,7 +252,10 @@ class TestOpenConnectionSafe:
         """Should return None and not raise on OSError."""
         with (
             patch("pandaproxy.helper.asyncio.open_connection", new_callable=MagicMock),
-            patch("pandaproxy.helper.asyncio.wait_for", new=AsyncMock(side_effect=OSError("Network unreachable"))),
+            patch(
+                "pandaproxy.helper.asyncio.wait_for",
+                new=AsyncMock(side_effect=OSError("Network unreachable")),
+            ),
         ):
             result = await open_connection_safe("192.168.1.1", 6000)
         assert result is None
@@ -235,7 +268,8 @@ class TestOpenConnectionSafe:
         mock_ctx = MagicMock(spec=ssl.SSLContext)
 
         with patch(
-            "pandaproxy.helper.asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))
+            "pandaproxy.helper.asyncio.open_connection",
+            new=AsyncMock(return_value=(reader, writer)),
         ) as mock_conn:
             await open_connection_safe("192.168.1.1", 6000, ssl_context=mock_ctx)
 
@@ -259,10 +293,12 @@ class TestCloseWriter:
 
     @pytest.mark.asyncio
     async def test_handles_exception_gracefully(self):
-        """Should not raise if wait_closed fails."""
+        """Should not raise if wait_closed fails with a connection-level error."""
         writer = AsyncMock()
         writer.close = MagicMock()
-        writer.wait_closed = AsyncMock(side_effect=Exception("Connection lost"))
+        writer.wait_closed = AsyncMock(
+            side_effect=ConnectionResetError("Connection lost")
+        )
 
         # Should not raise
         await close_writer(writer)

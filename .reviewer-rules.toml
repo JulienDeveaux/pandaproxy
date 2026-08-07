@@ -21,3 +21,8 @@ reason = "Catching SSLError, logging, and dropping the connection is complete er
 code_pattern = "run_in_executor"
 disposition = "by_design"
 reason = "asyncio.to_thread() is the correct pattern for Python 3.13. get_event_loop().run_in_executor() is deprecated and must not be suggested."
+
+[[rules]]
+code_pattern = "Python 2 syntax|comma instead of tuple"
+disposition = "false_positive"
+reason = "except A, B: (no parentheses) is valid Python 3.14+ syntax per PEP 758 'Allow except and except* expressions without parentheses' (accepted for 3.14). This project requires Python >=3.14 (see pyproject.toml). It is not a Python 2 remnant and does not raise SyntaxError - verified via ast.parse, ruff check, and direct interpreter testing."

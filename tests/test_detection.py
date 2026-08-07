@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pandaproxy.detection import _probe_chamber_port, _probe_rtsp_port, detect_camera_type
+from pandaproxy.detection import (
+    _probe_chamber_port,
+    _probe_rtsp_port,
+    detect_camera_type,
+)
 from pandaproxy.protocol import MAX_PAYLOAD_SIZE
 
 
@@ -126,7 +130,9 @@ class TestProbeIntegration:
         header = struct.pack("<I", 5000) + b"\x00" * 12
         reader.read = AsyncMock(return_value=header)
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_chamber_port("192.168.1.1", "testcode", ssl_ctx)
 
         assert result is True
@@ -139,7 +145,9 @@ class TestProbeIntegration:
         header = struct.pack("<I", 0) + b"\x00" * 12
         reader.read = AsyncMock(return_value=header)
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_chamber_port("192.168.1.1", "testcode", ssl_ctx)
 
         assert result is False
@@ -152,7 +160,9 @@ class TestProbeIntegration:
         header = struct.pack("<I", MAX_PAYLOAD_SIZE + 1) + b"\x00" * 12
         reader.read = AsyncMock(return_value=header)
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_chamber_port("192.168.1.1", "testcode", ssl_ctx)
 
         assert result is False
@@ -164,7 +174,9 @@ class TestProbeIntegration:
         reader, writer = self._make_rw()
         reader.read = AsyncMock(return_value=b"")
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_chamber_port("192.168.1.1", "testcode", ssl_ctx)
 
         assert result is False
@@ -188,7 +200,9 @@ class TestProbeIntegration:
         reader, writer = self._make_rw()
         reader.read = AsyncMock(return_value=b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n")
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_rtsp_port("192.168.1.1", ssl_ctx)
 
         assert result is True
@@ -200,7 +214,9 @@ class TestProbeIntegration:
         reader, writer = self._make_rw()
         reader.read = AsyncMock(return_value=b"RTSP/2.0 200 OK\r\n")
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_rtsp_port("192.168.1.1", ssl_ctx)
 
         assert result is True
@@ -212,7 +228,9 @@ class TestProbeIntegration:
         reader, writer = self._make_rw()
         reader.read = AsyncMock(return_value=b"some unexpected data")
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_rtsp_port("192.168.1.1", ssl_ctx)
 
         assert result is True
@@ -224,7 +242,9 @@ class TestProbeIntegration:
         reader, writer = self._make_rw()
         reader.read = AsyncMock(return_value=b"")
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_rtsp_port("192.168.1.1", ssl_ctx)
 
         assert result is False
@@ -246,7 +266,9 @@ class TestProbeIntegration:
         reader, writer = self._make_rw()
         reader.read = AsyncMock(side_effect=TimeoutError())
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_chamber_port("192.168.1.1", "testcode", ssl_ctx)
 
         assert result is False
@@ -258,7 +280,9 @@ class TestProbeIntegration:
         reader, writer = self._make_rw()
         reader.read = AsyncMock(side_effect=TimeoutError())
 
-        with patch("pandaproxy.detection.open_connection_safe", return_value=(reader, writer)):
+        with patch(
+            "pandaproxy.detection.open_connection_safe", return_value=(reader, writer)
+        ):
             result = await _probe_rtsp_port("192.168.1.1", ssl_ctx)
 
         assert result is False

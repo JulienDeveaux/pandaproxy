@@ -13,6 +13,8 @@ on the same port. This allows clients that only support a single server IP
 to work with the printer through the proxy.
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
@@ -57,7 +59,9 @@ class FTPProxy:
         if self._running:
             return
 
-        logger.info("Starting FTP passthrough proxy on %s:%d", self.bind_address, self.port)
+        logger.info(
+            "Starting FTP passthrough proxy on %s:%d", self.bind_address, self.port
+        )
         self._running = True
 
         # Start control channel server (port 990)
@@ -91,7 +95,9 @@ class FTPProxy:
                 bind_failures,
             )
         elif bind_failures > 0:
-            logger.debug("FTP data port binding: %d/%d ports available", bound_count, total_ports)
+            logger.debug(
+                "FTP data port binding: %d/%d ports available", bound_count, total_ports
+            )
 
         logger.info(
             "FTP proxy listening on port %d and data ports %d-%d (%d bound)",
@@ -146,18 +152,25 @@ class FTPProxy:
 
         try:
             # Connect to printer on the same port
-            result = await open_connection_safe(self.printer_ip, port, timeout=10.0, name=f"FTP {port_type}")
-            if result is None:
+            result = await open_connection_safe(
+                self.printer_ip, port, timeout=10.0, name=f"FTP {port_type}"
+            )
+            if not result:
                 if port == self.port:
-                    logger.warning("FTP control connection to printer %s:%d failed", self.printer_ip, port)
+                    logger.warning(
+                        "FTP control connection to printer %s:%d failed",
+                        self.printer_ip,
+                        port,
+                    )
                 return
 
             upstream_reader, upstream_writer = result
-            logger.debug("Connected to printer %s:%d", self.printer_ip, port)
-
-            # Forward data in both directions
-            await self._forward_bidirectional(client_reader, client_writer, upstream_reader, upstream_writer)
-
+            if upstream_reader and upstream_writer:
+                logger.debug("Connected to printer %s:%d", self.printer_ip, port)
+                # Forward data in both directions
+                await self._forward_bidirectional(
+                    client_reader, client_writer, upstream_reader, upstream_writer
+                )
         except Exception as e:
             logger.debug("FTP %s connection error: %s", port_type, e)
         finally:
@@ -168,8 +181,8 @@ class FTPProxy:
                 self._active_connections.discard(task)
             logger.debug("FTP %s connection closed", port_type)
 
+    @staticmethod
     async def _forward_bidirectional(
-        self,
         client_reader: asyncio.StreamReader,
         client_writer: asyncio.StreamWriter,
         upstream_reader: asyncio.StreamReader,
@@ -196,12 +209,18 @@ class FTPProxy:
                 logger.debug("Forward %s error: %s", direction, e)
 
         # Run both directions concurrently
-        task1 = asyncio.create_task(forward(client_reader, upstream_writer, "client->printer"))
-        task2 = asyncio.create_task(forward(upstream_reader, client_writer, "printer->client"))
+        task1 = asyncio.create_task(
+            forward(client_reader, upstream_writer, "client->printer")
+        )
+        task2 = asyncio.create_task(
+            forward(upstream_reader, client_writer, "printer->client")
+        )
 
         try:
             # Wait for either direction to complete
-            _done, pending = await asyncio.wait([task1, task2], return_when=asyncio.FIRST_COMPLETED)
+            _done, pending = await asyncio.wait(
+                [task1, task2], return_when=asyncio.FIRST_COMPLETED
+            )
 
             # Cancel the other direction
             for task in pending:

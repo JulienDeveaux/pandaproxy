@@ -1,16 +1,18 @@
 variables:
-  PYTHON_VERSION: "3.14"
+  PYTHON_VERSION: 3.14
+  ALPINE_VERSION: 3.23
+  MEDIAMTX_VERSION: 1.20.0
 
 include:
+  - component: $CI_SERVER_FQDN/nerdycraft/shared-ci/release-badge@main
   - component: $CI_SERVER_FQDN/nerdycraft/shared-ci/python@main
   - component: $CI_SERVER_FQDN/nerdycraft/shared-ci/docker@main
     inputs:
-      build-args: --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+      build-args: --build-arg PYTHON_VERSION=$PYTHON_VERSION --build-arg ALPINE_VERSION=$ALPINE_VERSION --build-arg MEDIAMTX_VERSION=$MEDIAMTX_VERSION
       version-build-arg: VERSION
-      test-command: "python -m pandaproxy --version"
+      test-command: pandaproxy --version
       rebuild-paths:
         - pyproject.toml
         - uv.lock
         - src/**/*
         - .gitlab-ci.yml
-  - component: $CI_SERVER_FQDN/nerdycraft/shared-ci/release-badge@main

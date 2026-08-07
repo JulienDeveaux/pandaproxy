@@ -1,0 +1,6 @@
+services:
+  pandaproxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
