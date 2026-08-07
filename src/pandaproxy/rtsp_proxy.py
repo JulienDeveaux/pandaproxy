@@ -5,11 +5,12 @@ This proxy uses FFmpeg to pull the stream and push it to MediaMTX, which serves
 multiple clients with authentication.
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
 import os
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -61,23 +62,6 @@ paths:
 """
 
 
-def check_dependencies() -> tuple[bool, list[str]]:
-    """Check if required dependencies (ffmpeg, mediamtx) are installed.
-
-    Returns:
-        Tuple of (all_ok, list_of_missing_dependencies)
-    """
-    missing = []
-
-    if not shutil.which("ffmpeg"):
-        missing.append("ffmpeg")
-
-    if not shutil.which("mediamtx"):
-        missing.append("mediamtx")
-
-    return len(missing) == 0, missing
-
-
 class RTSPProxy:
     """RTSP proxy using FFmpeg and MediaMTX for BambuLab camera stream.
 
@@ -112,18 +96,13 @@ class RTSPProxy:
         self._ffmpeg_log_task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        """Start the RTSP proxy (MediaMTX + FFmpeg)."""
-        logger.info("Starting RTSP proxy on %s:%d", self.bind_address, self.port)
+        """Start the RTSP proxy (MediaMTX + FFmpeg).
 
-        # Check dependencies
-        ok, missing = check_dependencies()
-        if not ok:
-            raise RuntimeError(
-                f"Missing required dependencies: {', '.join(missing)}. "
-                "Please install them before running the RTSP proxy.\n"
-                "  - ffmpeg: Install via your package manager (e.g., apt install ffmpeg, brew install ffmpeg)\n"
-                "  - mediamtx: Download from https://github.com/bluenviron/mediamtx/releases"
-            )
+        Assumes the caller has already verified ffmpeg/mediamtx are installed
+        (cli.py does this before constructing RTSPProxy); this method does not
+        re-check.
+        """
+        logger.info("Starting RTSP proxy on %s:%d", self.bind_address, self.port)
 
         self._running = True
 
@@ -139,7 +118,9 @@ class RTSPProxy:
         # Start FFmpeg to pull from printer and push to MediaMTX
         await self._start_ffmpeg()
 
-        logger.info("RTSP proxy running on rtsp://%s:%d/stream", self.bind_address, self.port)
+        logger.info(
+            "RTSP proxy running on rtsp://%s:%d/stream", self.bind_address, self.port
+        )
 
     async def stop(self) -> None:
         """Stop the RTSP proxy."""
@@ -174,7 +155,7 @@ class RTSPProxy:
 
         log_tasks = [t for t in (self._ffmpeg_log_task, self._mediamtx_log_task) if t]
         if log_tasks:
-            await asyncio.gather(*(cancel_task(t) for t in log_tasks))
+            await asyncio.gather(*(cancel_task(t) for t in log_tasks if t))
         self._ffmpeg_log_task = None
         self._mediamtx_log_task = None
 
@@ -192,12 +173,17 @@ class RTSPProxy:
         It must never exit silently - any unexpected crash is logged.
         """
         self._monitor_task = asyncio.current_task()
+        # noinspection broad-exception
         try:
             await self._monitor_processes()
             logger.info("Monitor loop exited normally")
         except asyncio.CancelledError:
             logger.debug("Monitor loop cancelled")
         except Exception:
+            # Broad by design: this background task must never die silently (see
+            # docstring). _monitor_processes already handles all expected failure
+            # modes internally; this is the last-resort guard against bugs or
+            # unanticipated exceptions escaping it.
             logger.exception("Monitor loop crashed unexpectedly")
 
     async def _create_mediamtx_config(self) -> Path:
@@ -227,7 +213,7 @@ class RTSPProxy:
 
     async def _start_mediamtx(self) -> None:
         """Start MediaMTX process."""
-        cmd = ["mediamtx", str(self._config_path)]
+        cmd = ["mediamtx", str(self._config_path) if self._config_path else ""]
 
         logger.info("Starting MediaMTX: %s", " ".join(cmd))
 
@@ -238,21 +224,21 @@ class RTSPProxy:
         )
 
         # Start log readers
-        self._mediamtx_log_task = asyncio.create_task(self._read_process_output(self._mediamtx_process, "mediamtx"))
+        if not self._mediamtx_process:
+            raise RuntimeError("Failed to start MediaMTX process")
+        self._mediamtx_log_task = asyncio.create_task(
+            self._read_process_output(self._mediamtx_process, "mediamtx")
+        )
 
     async def _start_ffmpeg(self) -> None:
         """Start FFmpeg process to pull RTSPS from printer and push to MediaMTX."""
         # Build RTSPS URL with authentication
         # BambuLab uses: rtsps://bblp:<access_code>@<ip>:322/streaming/live/1
-        source_url = f"rtsps://bblp:{self.access_code}@{self.printer_ip}:322/streaming/live/1"
-
+        source_url = (
+            f"rtsps://bblp:{self.access_code}@{self.printer_ip}:322/streaming/live/1"
+        )
         # MediaMTX publish URL (internal, no auth needed for publisher)
         publish_url = f"rtsps://bblp:{self.access_code}@127.0.0.1:{self.port}/stream"
-
-        # Use ffmpeg-python to construct the command
-        # Note: ffmpeg-python is a wrapper that constructs the command line arguments
-        # We still execute it via asyncio.create_subprocess_exec to have async control
-        # and output capturing consistent with the rest of the application.
 
         stream = ffmpeg.input(
             source_url,
@@ -292,9 +278,15 @@ class RTSPProxy:
         )
 
         # Start log readers
-        self._ffmpeg_log_task = asyncio.create_task(self._read_process_output(self._ffmpeg_process, "ffmpeg"))
+        if not self._ffmpeg_process:
+            raise RuntimeError("Failed to start FFmpeg process")
+        self._ffmpeg_log_task = asyncio.create_task(
+            self._read_process_output(self._ffmpeg_process, "ffmpeg")
+        )
 
-    async def _read_process_output(self, process: asyncio.subprocess.Process, name: str) -> None:
+    async def _read_process_output(
+        self, process: asyncio.subprocess.Process, name: str
+    ) -> None:
         """Read and log process stdout/stderr."""
 
         async def read_stream(stream: asyncio.StreamReader | None, level: int) -> None:
@@ -321,8 +313,14 @@ class RTSPProxy:
 
             try:
                 # Check MediaMTX
-                if self._mediamtx_process and self._mediamtx_process.returncode is not None:
-                    logger.warning("MediaMTX process exited with code %d", self._mediamtx_process.returncode)
+                if (
+                    self._mediamtx_process
+                    and self._mediamtx_process.returncode is not None
+                ):
+                    logger.warning(
+                        "MediaMTX process exited with code %d",
+                        self._mediamtx_process.returncode,
+                    )
                     if self._running:
                         logger.info("Restarting MediaMTX...")
                         # Cancel the old log task before starting fresh (avoids task leak)
@@ -334,7 +332,10 @@ class RTSPProxy:
 
                 # Check FFmpeg
                 if self._ffmpeg_process and self._ffmpeg_process.returncode is not None:
-                    logger.warning("FFmpeg process exited with code %d", self._ffmpeg_process.returncode)
+                    logger.warning(
+                        "FFmpeg process exited with code %d",
+                        self._ffmpeg_process.returncode,
+                    )
                     if self._running:
                         logger.info("Restarting FFmpeg in 5 seconds...")
                         # Cancel the old log task before starting fresh (avoids task leak)

@@ -5,12 +5,12 @@ multiple client connections, fanning out printer messages to all clients and
 forwarding client commands to the printer.
 
 Architecture:
-- Upstream (printer): Single persistent aiomqtt client with auto-reconnect.
-  Subscribes to all topics (#) and publishes client commands.
-- Clients: TLS server accepting MQTT connections. Each client's CONNECT,
-  SUBSCRIBE, PINGREQ, and DISCONNECT are handled locally by the proxy.
-  PUBLISH messages from clients are forwarded to the upstream printer.
-  PUBLISH messages from the printer are broadcast to all connected clients.
+    - Upstream (printer): Single persistent aiomqtt client with auto-reconnect.
+      Subscribes to all topics (#) and publishes client commands.
+    - Clients: TLS server accepting MQTT connections. Each client's CONNECT,
+      SUBSCRIBE, PINGREQ, and DISCONNECT are handled locally by the proxy.
+      PUBLISH messages from clients are forwarded to the upstream printer.
+      PUBLISH messages from the printer are broadcast to all connected clients.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from pandaproxy.mqtt_protocol import (
     parse_unsubscribe,
     read_packet,
 )
-from pandaproxy.protocol import MQTT_PORT
+from pandaproxy.protocol import MQTT_PORT, PRINTER_CERT_FILENAME
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,7 @@ class MQTTProxy:
         cert_path: Path,
         key_path: Path,
         bind_address: str = "0.0.0.0",  # noqa: S104  # pandaproxy binds all interfaces by design
+        printer_cert_path: Path | str = PRINTER_CERT_FILENAME,
     ) -> None:
         self.printer_ip = printer_ip
         self.access_code = access_code
@@ -88,6 +89,7 @@ class MQTTProxy:
         self.cert_path = cert_path
         self.key_path = key_path
         self.bind_address = bind_address
+        self.printer_cert_path = printer_cert_path
         self.port = MQTT_PORT
 
         self._running = False
@@ -172,11 +174,13 @@ class MQTTProxy:
 
     async def _upstream_connection_loop(self) -> None:
         """Maintain a persistent MQTT connection to the printer, reconnecting on failure."""
-        printer_ssl = create_ssl_context()
+        printer_ssl = create_ssl_context(self.printer_cert_path)
 
         while self._running:
             try:
-                logger.info("Connecting to printer MQTT at %s:%d", self.printer_ip, self.port)
+                logger.info(
+                    "Connecting to printer MQTT at %s:%d", self.printer_ip, self.port
+                )
 
                 async with aiomqtt.Client(
                     hostname=self.printer_ip,
@@ -202,11 +206,17 @@ class MQTTProxy:
                             "Printer -> topic=%s qos=%d len=%d",
                             message.topic,
                             message.qos,
-                            len(message.payload if isinstance(message.payload, bytes) else b""),
+                            len(
+                                message.payload
+                                if isinstance(message.payload, bytes)
+                                else b""
+                            ),
                         )
                         packet = build_publish(
                             str(message.topic),
-                            message.payload if isinstance(message.payload, bytes) else b"",
+                            message.payload
+                            if isinstance(message.payload, bytes)
+                            else b"",
                         )
                         await self._broadcast_to_clients(packet)
 
@@ -237,7 +247,9 @@ class MQTTProxy:
                 except aiomqtt.MqttError as e:
                     logger.warning("Failed to forward to upstream: %s", e)
             else:
-                logger.warning("Upstream not connected, dropping client publish to %s", topic)
+                logger.warning(
+                    "Upstream not connected, dropping client publish to %s", topic
+                )
 
     # ------------------------------------------------------------------
     # Client broadcast
@@ -262,7 +274,9 @@ class MQTTProxy:
     # Client connection handling
     # ------------------------------------------------------------------
 
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         """Handle a new MQTT client connection."""
         peer = writer.get_extra_info("peername")
         logger.info("New MQTT connection from %s", peer)
@@ -272,7 +286,9 @@ class MQTTProxy:
         try:
             # --- MQTT CONNECT handshake ---
             try:
-                pkt = await asyncio.wait_for(read_packet(reader), timeout=CLIENT_CONNECT_TIMEOUT)
+                pkt = await asyncio.wait_for(
+                    read_packet(reader), timeout=CLIENT_CONNECT_TIMEOUT
+                )
             except TimeoutError:
                 logger.warning("Client %s CONNECT timeout", peer)
                 return
@@ -281,25 +297,33 @@ class MQTTProxy:
                 return
 
             if pkt.packet_type != PacketType.CONNECT:
-                logger.warning("Expected CONNECT from %s, got type %d", peer, pkt.packet_type)
+                logger.warning(
+                    "Expected CONNECT from %s, got type %d", peer, pkt.packet_type
+                )
                 return
 
             connect_info = parse_connect(pkt.payload)
             if connect_info.password != self.access_code:
                 writer.write(build_connack(return_code=CONNACK_NOT_AUTHORIZED))
                 await writer.drain()
-                logger.warning("Auth failed for %s (client_id=%s)", peer, connect_info.client_id)
+                logger.warning(
+                    "Auth failed for %s (client_id=%s)", peer, connect_info.client_id
+                )
                 return
 
             writer.write(build_connack(return_code=CONNACK_ACCEPTED))
             await writer.drain()
-            logger.info("Client %s authenticated (client_id=%s)", peer, connect_info.client_id)
+            logger.info(
+                "Client %s authenticated (client_id=%s)", peer, connect_info.client_id
+            )
 
             # --- Wait for upstream to be ready ---
             if not self._upstream_connected.is_set():
                 logger.info("Waiting for upstream connection for %s...", peer)
                 try:
-                    await asyncio.wait_for(self._upstream_connected.wait(), timeout=UPSTREAM_WAIT_TIMEOUT)
+                    await asyncio.wait_for(
+                        self._upstream_connected.wait(), timeout=UPSTREAM_WAIT_TIMEOUT
+                    )
                 except TimeoutError:
                     logger.warning("Upstream not available for %s, disconnecting", peer)
                     return
@@ -311,10 +335,16 @@ class MQTTProxy:
 
             # --- Run bidirectional forwarding ---
             keepalive = connect_info.keepalive
-            send_task = asyncio.create_task(self._client_send_loop(client_id, queue, writer))
-            recv_task = asyncio.create_task(self._client_recv_loop(client_id, reader, writer, keepalive))
+            send_task = asyncio.create_task(
+                self._client_send_loop(client_id, queue, writer)
+            )
+            recv_task = asyncio.create_task(
+                self._client_recv_loop(client_id, reader, writer, keepalive)
+            )
 
-            _done, pending = await asyncio.wait([send_task, recv_task], return_when=asyncio.FIRST_COMPLETED)
+            _done, pending = await asyncio.wait(
+                [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
+            )
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
@@ -333,8 +363,11 @@ class MQTTProxy:
             await close_writer(writer)
             logger.info("Connection from %s closed", peer)
 
+    @staticmethod
     async def _client_send_loop(
-        self, client_id: str, queue: asyncio.Queue[bytes | None], writer: asyncio.StreamWriter
+        client_id: str,
+        queue: asyncio.Queue[bytes | None],
+        writer: asyncio.StreamWriter,
     ) -> None:
         """Drain the client's queue and write packets to its socket."""
         try:
@@ -344,7 +377,7 @@ class MQTTProxy:
                     break
                 writer.write(packet)
                 await writer.drain()
-        except (ConnectionResetError, BrokenPipeError):
+        except ConnectionResetError, BrokenPipeError:
             logger.debug("Client %s connection reset during send", client_id)
         except ssl.SSLError as e:
             logger.debug("Client %s SSL error during send: %s", client_id, e)
@@ -388,7 +421,9 @@ class MQTTProxy:
                         pkt_id, topics = parse_unsubscribe(pkt.payload)
                         writer.write(build_unsuback(pkt_id))
                         await writer.drain()
-                        logger.debug("Client %s unsubscribed from %s", client_id, topics)
+                        logger.debug(
+                            "Client %s unsubscribed from %s", client_id, topics
+                        )
 
                     case PacketType.PINGREQ:
                         writer.write(build_pingresp())

@@ -18,3 +18,4 @@ MAX_PAYLOAD_SIZE = 10_000_000  # 10MB sanity limit
 # Certificate constants
 CERT_FILENAME = "pandaproxy.crt"
 KEY_FILENAME = "pandaproxy.key"
+PRINTER_CERT_FILENAME = "printer.cer"

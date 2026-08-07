@@ -9,7 +9,12 @@ import asyncio
 
 import pytest
 
-from pandaproxy.ftp_proxy import FTP_DATA_MIN_PORTS, FTP_DATA_PORT_END, FTP_DATA_PORT_START, FTPProxy
+from pandaproxy.ftp_proxy import (
+    FTP_DATA_MIN_PORTS,
+    FTP_DATA_PORT_END,
+    FTP_DATA_PORT_START,
+    FTPProxy,
+)
 
 # Use ephemeral ports for testing (avoids privileged port issues)
 TEST_CONTROL_PORT = 19990
@@ -36,8 +41,12 @@ class TestFTPProxyLifecycle:
     async def test_proxy_start_stop(self, test_proxy, monkeypatch):
         """Test that proxy starts and stops cleanly."""
         # Monkeypatch the data port range for faster tests
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START)
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END)
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START
+        )
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END
+        )
 
         proxy = test_proxy
 
@@ -59,8 +68,12 @@ class TestFTPProxyLifecycle:
     @pytest.mark.asyncio
     async def test_proxy_double_start(self, test_proxy, monkeypatch):
         """Test that double start is idempotent."""
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START)
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END)
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START
+        )
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END
+        )
 
         proxy = test_proxy
 
@@ -76,8 +89,12 @@ class TestFTPProxyLifecycle:
     @pytest.mark.asyncio
     async def test_proxy_listens_on_correct_ports(self, test_proxy, monkeypatch):
         """Test that proxy listens on control and data ports."""
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START)
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END)
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START
+        )
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END
+        )
 
         proxy = test_proxy
 
@@ -107,8 +124,12 @@ class TestFTPProxyPassthrough:
     @pytest.mark.asyncio
     async def test_passthrough_connection_to_mock_server(self, monkeypatch):
         """Test that proxy forwards connections to the backend server."""
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START)
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END)
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START
+        )
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END
+        )
 
         # Create a simple echo server to act as the "printer"
         received_data = []
@@ -127,7 +148,9 @@ class TestFTPProxyPassthrough:
 
         # Create proxy that listens on a different ephemeral port
         # but forwards to the mock server's port
-        proxy_listen_server = await asyncio.start_server(lambda _r, _w: None, "127.0.0.1", 0)
+        proxy_listen_server = await asyncio.start_server(
+            lambda _r, _w: None, "127.0.0.1", 0
+        )
         proxy_port = proxy_listen_server.sockets[0].getsockname()[1]
         proxy_listen_server.close()
         await proxy_listen_server.wait_closed()
@@ -178,8 +201,12 @@ class TestFTPProxyPassthrough:
     @pytest.mark.asyncio
     async def test_proxy_handles_connection_refused(self, monkeypatch):
         """Test that proxy handles connection refused gracefully."""
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START)
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END)
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START
+        )
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END
+        )
 
         proxy = FTPProxy(
             printer_ip="127.0.0.1",
@@ -197,7 +224,9 @@ class TestFTPProxyPassthrough:
             proxy.printer_ip = "127.0.0.1"
 
             # Try to connect to the proxy
-            reader, writer = await asyncio.open_connection("127.0.0.1", TEST_CONTROL_PORT)
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", TEST_CONTROL_PORT
+            )
 
             # Connection to proxy succeeds, but upstream should fail (no server on TEST_CONTROL_PORT on printer side)
             # The proxy should close the connection gracefully
@@ -205,7 +234,7 @@ class TestFTPProxyPassthrough:
                 data = await asyncio.wait_for(reader.read(100), timeout=2.0)
                 # Connection should be closed by proxy (empty read)
                 assert data == b""
-            except (ConnectionResetError, TimeoutError):
+            except ConnectionResetError, TimeoutError:
                 # Also acceptable - connection was terminated
                 pass
 
@@ -238,8 +267,12 @@ class TestFTPProxyDataPorts:
     @pytest.mark.asyncio
     async def test_data_port_servers_created(self, test_proxy, monkeypatch):
         """Test that data port servers are created during startup."""
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START)
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END)
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START
+        )
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END
+        )
 
         proxy = test_proxy
 
@@ -270,8 +303,12 @@ class TestFTPProxyEdgeCases:
     @pytest.mark.asyncio
     async def test_multiple_stop_calls(self, test_proxy, monkeypatch):
         """Test that multiple stop calls are safe."""
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START)
-        monkeypatch.setattr("pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END)
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_START", TEST_DATA_PORT_START
+        )
+        monkeypatch.setattr(
+            "pandaproxy.ftp_proxy.FTP_DATA_PORT_END", TEST_DATA_PORT_END
+        )
 
         proxy = test_proxy
 

@@ -111,15 +111,16 @@ pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 -v
 
 ### CLI Options
 
-| Option            | Short | Environment Variable | Description                                      |
-| ----------------- | ----- | -------------------- | ------------------------------------------------ |
-| `--printer-ip`    | `-p`  | `PRINTER_IP`         | IP address of the BambuLab printer               |
-| `--access-code`   | `-a`  | `ACCESS_CODE`        | Access code (found in printer settings)          |
-| `--serial-number` | `-s`  | `SERIAL_NUMBER`      | Printer serial number                            |
-| `--bind`          | `-b`  | `BIND_ADDRESS`       | Address to bind proxy servers (default: 0.0.0.0) |
-| `--services`      |       | `SERVICES`           | Comma-separated services: camera,mqtt,ftp        |
-| `--enable-all`    |       | `ENABLE_ALL`         | Enable all services                              |
-| `--verbose`       | `-v`  |                      | Enable debug logging                             |
+| Option            | Short | Environment Variable | Description                                               |
+| ----------------- | ----- | -------------------- | --------------------------------------------------------- |
+| `--printer-ip`    | `-p`  | `PRINTER_IP`         | IP address of the BambuLab printer                        |
+| `--access-code`   | `-a`  | `ACCESS_CODE`        | Access code (found in printer settings)                   |
+| `--serial-number` | `-s`  | `SERIAL_NUMBER`      | Printer serial number                                     |
+| `--bind`          | `-b`  | `BIND_ADDRESS`       | Address to bind proxy servers (default: 0.0.0.0)          |
+| `--services`      |       | `SERVICES`           | Comma-separated services: camera,mqtt,ftp                 |
+| `--enable-all`    |       | `ENABLE_ALL`         | Enable all services                                       |
+| `--cert`          |       | `PRINTER_CERT`       | Path to the printer CA certificate (default: printer.cer) |
+| `--verbose`       | `-v`  |                      | Enable debug logging                                      |
 
 ### Environment Variables
 
@@ -258,12 +259,12 @@ lftp -u bblp,12345678 ftps://192.168.1.50:990
 ## Printer Model Support
 
 | Model                  | Camera          | MQTT | FTP |
-|------------------------|-----------------|------|-----|
-| X1, X1C, X1E           | RTSPS (:322)    | ✓   | ✓  |
-| H2C, H2D, H2D Pro, H2S | RTSPS (:322)    | ✓   | ✓  |
-| P2S                    | RTSPS (:322)    | ✓   | ✓  |
-| A1, A1 Mini            | Chamber (:6000) | ✓   | ✓  |
-| P1P, P1S               | Chamber (:6000) | ✓   | ✓  |
+| ---------------------- | --------------- | ---- | --- |
+| X1, X1C, X1E           | RTSPS (:322)    | ✓    | ✓   |
+| H2C, H2D, H2D Pro, H2S | RTSPS (:322)    | ✓    | ✓   |
+| P2S                    | RTSPS (:322)    | ✓    | ✓   |
+| A1, A1 Mini            | Chamber (:6000) | ✓    | ✓   |
+| P1P, P1S               | Chamber (:6000) | ✓    | ✓   |
 
 ## Troubleshooting
 

@@ -1,5 +1,7 @@
 """Shared helper utilities for PandaProxy."""
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import datetime
@@ -16,23 +18,26 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+from pandaproxy.protocol import PRINTER_CERT_FILENAME
+
 logger = logging.getLogger(__name__)
 
 
-def create_ssl_context() -> ssl.SSLContext:
+def create_ssl_context(
+    cert_file: Path | str = PRINTER_CERT_FILENAME,
+) -> ssl.SSLContext:
     """Create an SSL context that verifies BambuLab printer certificates.
 
     Uses the bundled printer.cer CA certificates to verify the printer's identity.
     """
-    from importlib.resources import files
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_REQUIRED
 
     # Load the bundled CA certificates
-    cert_path = files("pandaproxy").joinpath("printer.cer")
-    ctx.load_verify_locations(str(cert_path))
+    cert_path = Path(cert_file) if isinstance(cert_file, str) else cert_file
+    ctx.load_verify_locations(cert_path)
 
     return ctx
 
@@ -80,7 +85,7 @@ def parse_auth_payload(data: bytes) -> str | None:
 
         # Strip null padding from access code
         return access_code.rstrip(b"\x00").decode("utf-8")
-    except (struct.error, UnicodeDecodeError):
+    except struct.error, UnicodeDecodeError:
         return None
 
 
@@ -124,7 +129,9 @@ def generate_self_signed_cert(
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.datetime.now(datetime.UTC))
-        .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365))
+        .not_valid_after(
+            datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365)
+        )
     )
 
     # Add SANs if provided
@@ -225,7 +232,8 @@ async def close_writer(writer: asyncio.StreamWriter, timeout: float = 2.0) -> No
         transport = writer.transport
         if transport:
             transport.abort()
-    except Exception:  # noqa: S110  # suppress residual errors during stream teardown (e.g. SSL reset)
+    except OSError:
+        # Suppress residual errors during stream teardown (e.g. SSL reset, broken pipe)
         pass  # non-actionable at this point; connection is already gone
 
 

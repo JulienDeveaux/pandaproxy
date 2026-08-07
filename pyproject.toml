@@ -2,12 +2,28 @@
 name = "PandaProxy"
 dynamic = ["version"]
 description = "BambuLab Multi-Service Proxy - Proxy camera, MQTT, and FTP from BambuLab printers"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
+
 dependencies = [
     "aiomqtt>=2.0.0",
-    "typer",
     "cryptography>=41.0.0",
     "ffmpeg-python",
+    "typer",
+]
+
+[dependency-groups]
+dev = [
+    {include-group = "lint"},
+    {include-group = "test"},
+]
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-timeout",
+]
+lint = [
+    "ruff"
 ]
 
 [project.scripts]
@@ -26,25 +42,11 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "src/pandaproxy/_version.py"
 
-[dependency-groups]
-lint = ["ruff>=0.15.0"]
-test = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
-    "pytest-timeout>=2.3.0",
-    "pytest-cov>=6.0.0",
-]
-dev = [
-    {include-group = "lint"},
-    {include-group = "test"},
-]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/pandaproxy"]
-include = ["src/pandaproxy/*.cer"]
 
 [tool.ruff]
-line-length = 120
+line-length = 88
 
 [tool.ruff.lint]
 select = [

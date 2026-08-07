@@ -1,26 +1,27 @@
 # syntax=docker/dockerfile:1
 ARG PYTHON_VERSION
-FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-alpine AS base
+ARG ALPINE_VERSION
+FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-alpine${ALPINE_VERSION} AS base
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONUNBUFFERED=1 \
-    UV_PYTHON_DOWNLOADS=never \
-    UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:$PATH"
 
 
 FROM base AS builder
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy
 
 RUN apk add --no-cache \
+    curl \
     gcc \
     musl-dev \
     libffi-dev
 
 WORKDIR /app
-
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache \
     uv sync --frozen --no-dev --no-install-project
@@ -32,43 +33,14 @@ COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache \
     uv sync --frozen --no-dev
 
+# Install MediaMTX
+ARG MEDIAMTX_VERSION
+ARG ARCH=amd64
+RUN curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/mediamtx_v${MEDIAMTX_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/mediamtx.tar.gz && \
+    tar -xz -C /tmp -f /tmp/mediamtx.tar.gz
+
 
 FROM base
-
-RUN apk add --no-cache \
-    ffmpeg \
-    openssl \
-    curl \
-    ca-certificates \
-    libcap \
-    bash
-
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-# Install MediaMTX
-ARG MEDIAMTX_VERSION=1.9.3
-ARG TARGETARCH
-RUN case "${TARGETARCH}" in \
-        amd64) ARCH="amd64" ;; \
-        arm64) ARCH="arm64v8" ;; \
-        arm) ARCH="armv7" ;; \
-        *) ARCH="amd64" ;; \
-    esac && \
-    curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/mediamtx_v${MEDIAMTX_VERSION}_linux_${ARCH}.tar.gz" | \
-    tar -xz -C /usr/local/bin mediamtx && \
-    chmod +x /usr/local/bin/mediamtx
-
-# Allow binding to privileged ports (<1024) as non-root
-RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/python3.14 && \
-    setcap 'cap_net_bind_service=+ep' /usr/local/bin/mediamtx
-
-ARG UID=10001
-RUN adduser -D -H -h /app -u "${UID}" appuser
-USER appuser
-WORKDIR /app
-
-COPY --from=builder --chown=${UID} /app /app
-
 ENV PRINTER_IP="" \
     ACCESS_CODE="" \
     SERIAL_NUMBER="" \
@@ -76,9 +48,29 @@ ENV PRINTER_IP="" \
     SERVICES="" \
     ENABLE_ALL=""
 
-EXPOSE 322 6000 8883 990
+RUN apk add --no-cache \
+    ffmpeg \
+    openssl \
+    ca-certificates \
+    libcap
+
+COPY --from=builder --chmod=0755 /tmp/mediamtx /usr/local/bin/mediamtx
+
+# Allow binding to privileged ports (<1024) as non-root
+RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/python3.14 && \
+    setcap 'cap_net_bind_service=+ep' /usr/local/bin/mediamtx
+
+ARG UID=65332
+RUN adduser -D -H -h /app -u "${UID}" appuser
+USER appuser
+WORKDIR /app
+
+COPY --from=builder --chown=${UID} /app /app
+COPY --chown=${UID} printer.cer /app/printer.cer
+
+EXPOSE 322 990 6000 8883
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD pgrep -f pandaproxy || exit 1
 
-CMD [ "python", "-m", "pandaproxy" ]
+CMD ["pandaproxy"]
