@@ -12,6 +12,7 @@ include:
   - component: $CI_SERVER_FQDN/nerdycraft/shared-ci/docker@main
     inputs:
       build-args: --build-arg PYTHON_VERSION=$PYTHON_VERSION --build-arg ALPINE_VERSION=$ALPINE_VERSION --build-arg MEDIAMTX_VERSION=$MEDIAMTX_VERSION
+      image-format: docker
       version-build-arg: VERSION
       test-command: pandaproxy --version
       rebuild-paths:

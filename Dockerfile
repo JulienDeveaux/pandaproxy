@@ -60,9 +60,9 @@ COPY --from=builder --chmod=0755 /tmp/mediamtx /usr/local/bin/mediamtx
 RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/python3.14 && \
     setcap 'cap_net_bind_service=+ep' /usr/local/bin/mediamtx
 
-ARG UID=65332
-RUN adduser -D -H -h /app -u "${UID}" appuser
-USER appuser
+ARG UID=65532
+RUN adduser -D -H -h /app -u "${UID}" pandaproxy
+USER pandaproxy
 WORKDIR /app
 
 COPY --from=builder --chown=${UID} /app /app
