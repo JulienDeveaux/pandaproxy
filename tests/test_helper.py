@@ -1,5 +1,6 @@
 """Tests for helper utility functions."""
 
+import datetime
 import ssl
 import struct
 import tempfile
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pandaproxy.helper import (
+    certificate_expires_soon,
     close_writer,
     create_auth_payload,
     create_ssl_context,
@@ -315,3 +317,54 @@ class TestCloseWriter:
         writer.wait_closed = AsyncMock()
 
         await close_writer(writer)
+
+
+class TestCertificateExpirySignal:
+    """A persisted certificate must not be allowed to die quietly."""
+
+    @staticmethod
+    def _write(path, *, days_from_now: int) -> None:
+        """A minimal self-signed certificate expiring at a chosen offset."""
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "expiry-test")])
+        now = datetime.datetime.now(datetime.UTC)
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=400))
+            .not_valid_after(now + datetime.timedelta(days=days_from_now))
+            .sign(key, hashes.SHA256())
+        )
+        path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+
+    def test_a_fresh_certificate_is_left_alone(self, tmp_path):
+        cert = tmp_path / "fresh.crt"
+        self._write(cert, days_from_now=825)
+        assert certificate_expires_soon(cert) is False
+
+    def test_an_expired_certificate_is_flagged(self, tmp_path):
+        cert = tmp_path / "old.crt"
+        self._write(cert, days_from_now=-1)
+        assert certificate_expires_soon(cert) is True
+
+    def test_the_margin_catches_it_before_it_dies(self, tmp_path):
+        # Reissuing on the expiry date itself would mean a window where
+        # clients refuse the proxy; the margin is the whole point.
+        cert = tmp_path / "soon.crt"
+        self._write(cert, days_from_now=10)
+        assert certificate_expires_soon(cert) is True
+        assert certificate_expires_soon(cert, margin_days=1) is False
+
+    def test_an_unreadable_certificate_counts_as_due(self, tmp_path):
+        assert certificate_expires_soon(tmp_path / "absent.crt") is True
+        junk = tmp_path / "junk.crt"
+        junk.write_text("not a certificate")
+        assert certificate_expires_soon(junk) is True

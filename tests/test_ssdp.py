@@ -13,6 +13,7 @@ from pandaproxy.ssdp import (
 )
 
 IP = "192.168.1.66"
+FIRMWARE = "01.09.01.00"
 SERIAL = "01P00C541700323"
 
 
@@ -105,7 +106,9 @@ class TestAnnouncerDelivery:
                 # One announcer per port, since the port is module-level.
                 for port, listener in zip(ports, listeners, strict=True):
                     module.SSDP_PORT = port
-                    announcer = SsdpAnnouncer(IP, SERIAL, targets=["127.0.0.1"])
+                    announcer = SsdpAnnouncer(
+                        IP, SERIAL, targets=["127.0.0.1"], dev_version=FIRMWARE
+                    )
                     announcer.start()
                     assert announcer.announce_once() == 1
                     announcer.stop()
@@ -122,7 +125,9 @@ class TestAnnouncerDelivery:
         assert SSDP_PORT == 2021
 
     def test_counts_what_it_sent(self):
-        announcer = SsdpAnnouncer(IP, SERIAL, targets=["127.0.0.1", "127.0.0.2"])
+        announcer = SsdpAnnouncer(
+            IP, SERIAL, targets=["127.0.0.1", "127.0.0.2"], dev_version=FIRMWARE
+        )
         announcer.start()
         try:
             assert announcer.announce_once() == 2
@@ -134,7 +139,9 @@ class TestAnnouncerDelivery:
         assert SsdpAnnouncer(IP, SERIAL).announce_once() == 0
 
     async def test_run_keeps_announcing_until_cancelled(self):
-        announcer = SsdpAnnouncer(IP, SERIAL, targets=["127.0.0.1"], interval=0.05)
+        announcer = SsdpAnnouncer(
+            IP, SERIAL, targets=["127.0.0.1"], interval=0.05, dev_version=FIRMWARE
+        )
         announcer.start()
         task = asyncio.create_task(announcer.run())
         await asyncio.sleep(0.25)
@@ -198,3 +205,91 @@ class TestVersionResolution:
         finally:
             module.SSDP_PORT = original
             listener.close()
+
+
+class TestWaitsBrieflyForTheVersion:
+    """A missing version may delay an announcement, never cancel it."""
+
+    def test_nothing_is_sent_while_the_wait_is_on(self):
+        announcer = SsdpAnnouncer(IP, SERIAL, targets=["127.0.0.1"])
+        announcer.start()
+        try:
+            assert announcer.announce_once() == 0
+            assert announcer.sent == 0
+        finally:
+            announcer.stop()
+
+    def test_announces_anyway_once_the_wait_runs_out(self):
+        # The whole point: discovery works without a version, so a version
+        # that never arrives must not leave the device invisible for good.
+        now = [1000.0]
+        announcer = SsdpAnnouncer(
+            IP,
+            SERIAL,
+            targets=["127.0.0.1"],
+            version_grace=15.0,
+            clock=lambda: now[0],
+        )
+        announcer.start()
+        try:
+            assert announcer.announce_once() == 0
+            now[0] += 15.1
+            assert announcer.announce_once() == 1
+        finally:
+            announcer.stop()
+
+    def test_the_late_announcement_carries_an_empty_version(self):
+        now = [0.0]
+        announcer = SsdpAnnouncer(
+            IP,
+            SERIAL,
+            targets=["127.0.0.1"],
+            version_grace=5.0,
+            clock=lambda: now[0],
+        )
+        announcer.start()
+        now[0] = 99.0
+        payload = build_announcement(
+            IP, SERIAL, dev_version=announcer.resolve_version()
+        )
+        try:
+            assert announcer.announce_once() == 1
+            assert headers(payload)["DevVersion.bambu.com"] == ""
+        finally:
+            announcer.stop()
+
+    def test_resumes_early_once_the_version_appears(self):
+        # The printer only reports its version when asked, so the announcer
+        # has to tolerate not knowing it yet.
+        known: list[str] = []
+        announcer = SsdpAnnouncer(
+            IP,
+            SERIAL,
+            targets=["127.0.0.1"],
+            version_provider=lambda: (known or [None])[0],
+        )
+        announcer.start()
+        try:
+            assert announcer.announce_once() == 0
+            known.append("01.09.01.00")
+            assert announcer.announce_once() == 1
+        finally:
+            announcer.stop()
+
+    def test_configured_version_never_waits(self):
+        announcer = SsdpAnnouncer(
+            IP, SERIAL, targets=["127.0.0.1"], dev_version="01.09.01.00"
+        )
+        announcer.start()
+        try:
+            assert announcer.announce_once() == 1
+        finally:
+            announcer.stop()
+
+    def test_a_zero_grace_disables_the_wait(self):
+        announcer = SsdpAnnouncer(IP, SERIAL, targets=["127.0.0.1"], version_grace=0)
+        announcer.start()
+        try:
+            assert announcer.announce_once() == 1
+        finally:
+            announcer.stop()

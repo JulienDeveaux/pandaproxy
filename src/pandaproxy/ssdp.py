@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import time
 from email.utils import formatdate
 from typing import TYPE_CHECKING
 
@@ -42,6 +43,12 @@ DEFAULT_DEV_MODEL = "C12"
 
 DEFAULT_DEV_NAME = "PandaProxy"
 DEFAULT_DEV_SIGNAL = "-44"
+
+# How long to wait for the firmware version before announcing without it.
+# The version makes for a more faithful announcement, but discovery works
+# without it - measured against BambuStudio 02.08.02.60 - so a missing version
+# must never be allowed to silence the heartbeat for good.
+DEFAULT_VERSION_GRACE = 15.0
 
 
 def build_announcement(
@@ -95,6 +102,8 @@ class SsdpAnnouncer:
         dev_name: str = DEFAULT_DEV_NAME,
         dev_version: str = "",
         version_provider: Callable[[], str | None] | None = None,
+        version_grace: float = DEFAULT_VERSION_GRACE,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.advertise_ip = advertise_ip
         self.serial = serial
@@ -110,10 +119,14 @@ class SsdpAnnouncer:
         # printer reports its own version over MQTT - so prefer asking rather
         # than making the user configure it.
         self.version_provider = version_provider
+        self.version_grace = version_grace
+        self._clock = clock
+        self._started_at: float | None = None
 
         self._sock: socket.socket | None = None
         self._running = False
         self._sent = 0
+        self._warned_no_version = False
 
     @property
     def sent(self) -> int:
@@ -125,6 +138,7 @@ class SsdpAnnouncer:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self._running = True
+        self._started_at = self._clock()
         logger.info(
             "SSDP announcing %s as %s to %s every %.1fs",
             self.advertise_ip,
@@ -153,17 +167,49 @@ class SsdpAnnouncer:
                 logger.debug("Version provider failed: %s", e)
         return ""
 
+    def _within_grace(self) -> bool:
+        """Whether the wait for a firmware version may still continue."""
+        if self._started_at is None or self.version_grace <= 0:
+            return False
+        return self._clock() - self._started_at < self.version_grace
+
     def announce_once(self) -> int:
         """Send one announcement to every target. Returns how many went out."""
         if self._sock is None:
             return 0
+
+        version = self.resolve_version()
+        if not version and self._within_grace():
+            # Worth a brief wait: the printer reports its version over MQTT
+            # shortly after the proxy connects, and announcing it makes for a
+            # truer impersonation. But only a brief one - holding out for a
+            # version that never arrives would leave the device undiscoverable,
+            # which is far worse than announcing without it.
+            if not self._warned_no_version:
+                self._warned_no_version = True
+                logger.info(
+                    "Waiting up to %.0fs for the firmware version before "
+                    "announcing; set SSDP_DEV_VERSION to skip the wait",
+                    self.version_grace,
+                )
+            return 0
+
+        if self._warned_no_version:
+            self._warned_no_version = False
+            if version:
+                logger.info("Firmware version %s known, announcing", version)
+            else:
+                logger.info(
+                    "No firmware version after %.0fs; announcing without one",
+                    self.version_grace,
+                )
 
         payload = build_announcement(
             self.advertise_ip,
             self.serial,
             dev_model=self.dev_model,
             dev_name=self.dev_name,
-            dev_version=self.resolve_version(),
+            dev_version=version,
         )
         delivered = 0
         for target in self.targets:

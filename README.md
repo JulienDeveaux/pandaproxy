@@ -132,6 +132,7 @@ pandaproxy -p 10.0.0.100 -a 12345678 -s 01P00A000000001 -v
 | `--ssdp-targets`  |       | `SSDP_TARGETS`       | Where to announce the proxy so slicers can find it         |
 | `--ssdp-dev-model`|       | `SSDP_DEV_MODEL`     | Model code announced (default: C12, the P1S)               |
 | `--ssdp-dev-name` |       | `SSDP_DEV_NAME`      | Name shown in the slicer's device list                     |
+| `--ssdp-dev-version`|     | `SSDP_DEV_VERSION`   | Firmware version announced (default: whatever MQTT reports)|
 | `--ssdp-interval` |       | `SSDP_INTERVAL`      | Seconds between announcements (default: 2)                 |
 | `--data-port-start`|      | `FTP_DATA_PORT_START`| First passive FTP data port (default: 2000)                |
 | `--data-port-end` |       | `FTP_DATA_PORT_END`  | Last passive FTP data port (default: 2019)                 |
@@ -157,6 +158,62 @@ they are configured with, so this only matters for slicers.
 The real printer keeps announcing its own address under the same serial, so
 the two compete for the same entry. Announcing more often than it does
 (`SSDP_INTERVAL`, default 2s) wins in practice, but it is a race.
+
+### Making BambuStudio trust the proxy
+
+Finding the proxy is only half of it. BambuStudio verifies the MQTT
+certificate against its own bundled trust store and answers a self-signed one
+with a fatal `unknown_ca` alert - the connection dies during the handshake,
+before a single MQTT packet is exchanged. Nothing the proxy sends can satisfy
+it, because Bambu's own roots (`BBL CA`, `BBL CA2 RSA`, `BBL CA2 ECC`) will
+never sign a certificate for us.
+
+So the proxy runs a small certificate authority of its own. On first start it
+writes two files next to the certificates:
+
+    certs/pandaproxy-ca.crt    the authority - this is the one to distribute
+    certs/pandaproxy-ca.key    its private key - keep it on the proxy, only there
+
+and issues the certificate it presents from that authority, reissuing it
+whenever it is missing, signed by a different authority, or does not cover the
+current `ADVERTISE_IP`. The path is logged at startup.
+
+To make a slicer accept it, append the authority's certificate to
+BambuStudio's trust store:
+
+```bash
+scripts/trust-in-bambustudio.sh certs/pandaproxy-ca.crt
+```
+
+It is idempotent - it compares fingerprints, so re-running it adds nothing -
+and takes the app path as a second argument for non-default installs. The
+manual equivalent is a plain append:
+
+```bash
+# macOS
+cat certs/pandaproxy-ca.crt >> \
+  /Applications/BambuStudio.app/Contents/Resources/cert/printer.cer
+
+# Linux (AppImage: inside the extracted tree; package: under /usr/share)
+cat certs/pandaproxy-ca.crt >> /usr/share/BambuStudio/cert/printer.cer
+```
+
+Restart BambuStudio afterwards. Confirmed working against BambuStudio
+02.08.02.60 on macOS: Studio reads this file and honours an anchor added to it.
+Four things worth knowing:
+
+- **It is per machine.** Every workstation that slices needs the same step.
+- **Updates discard it.** The app bundle is replaced wholesale by Homebrew cask
+  upgrades and by Studio's own updater, so re-run the script after each one.
+- **It invalidates the app signature**, because the trust store is a sealed
+  resource. macOS still launches an app it has already assessed; if it refuses,
+  either `codesign --force --deep --sign - <app>` or reinstall it.
+- **It is a real trust decision.** Studio will accept *any* certificate this
+  authority signs, so `pandaproxy-ca.key` must stay on the proxy and nowhere
+  else. Never copy the `.key` alongside the `.crt`.
+
+Clients that can skip verification do not need any of this - ha-bambulab
+connects to the proxy as-is.
 
 ### Advertising the right address
 

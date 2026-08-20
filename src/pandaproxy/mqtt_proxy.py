@@ -114,6 +114,14 @@ PUSHALL_PAYLOAD = json.dumps(
     {"pushing": {"sequence_id": "0", "command": "pushall"}}
 ).encode("utf-8")
 
+# Also asked once per upstream connection. The printer only reports module
+# versions when someone asks, and nothing else does - yet the SSDP
+# announcement needs the firmware version, and BambuStudio refuses a device
+# that announces an empty one.
+GET_VERSION_PAYLOAD = json.dumps(
+    {"info": {"sequence_id": "0", "command": "get_version"}}
+).encode("utf-8")
+
 
 class MQTTProxy:
     """MQTT multiplexing proxy for BambuLab printers.
@@ -293,6 +301,7 @@ class MQTTProxy:
                     # through _request_pushall so a subscriber arriving before
                     # the reply does not ask for a second one.
                     await self._request_pushall()
+                    await self._request_version()
 
                     async for message in client.messages:
                         logger.debug(
@@ -420,6 +429,21 @@ class MQTTProxy:
             # full, so no sentinel could ever reach the send loop.
             if writer is not None:
                 await close_writer(writer)
+
+    async def _request_version(self) -> None:
+        """Ask the printer for its module versions.
+
+        Nothing else asks, so without this the cache never learns the
+        firmware version and the SSDP announcement goes out incomplete.
+        """
+        async with self._upstream_lock:
+            client = self._upstream_client
+            if client is None:
+                return
+            try:
+                await client.publish(self.request_topic, GET_VERSION_PAYLOAD, qos=0)
+            except aiomqtt.MqttError as e:
+                logger.warning("Could not request module versions: %s", e)
 
     def firmware_version(self) -> str | None:
         """Firmware version as reported by the printer, if known yet.

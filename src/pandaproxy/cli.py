@@ -13,6 +13,14 @@ from typing import Annotated
 
 import typer
 
+from pandaproxy.ca import (
+    CA_CERT_FILENAME,
+    CA_KEY_FILENAME,
+    create_ca,
+    is_signed_by,
+    issue_leaf,
+    load_ca,
+)
 from pandaproxy.chamber_proxy import ChamberImageProxy
 from pandaproxy.detection import detect_camera_type
 from pandaproxy.ftp_proxy import (
@@ -20,7 +28,7 @@ from pandaproxy.ftp_proxy import (
     FTP_DATA_PORT_START,
     FTPProxy,
 )
-from pandaproxy.helper import generate_self_signed_cert
+from pandaproxy.helper import certificate_expires_soon
 from pandaproxy.mqtt_proxy import MQTTProxy
 from pandaproxy.protocol import CERT_FILENAME, KEY_FILENAME, PRINTER_CERT_FILENAME
 from pandaproxy.rtsp_proxy import RTSPProxy
@@ -208,36 +216,53 @@ async def run_proxy(
         cert_path = certs_dir / CERT_FILENAME
         key_path = certs_dir / KEY_FILENAME
 
-        if (
-            cert_path.exists()
-            and key_path.exists()
-            and advertise_ip
-            and not certificate_covers(cert_path, advertise_ip)
-        ):
-            logger.info(
-                "Existing certificate does not cover %s, regenerating it",
-                advertise_ip,
-            )
-            cert_path.unlink(missing_ok=True)
-            key_path.unlink(missing_ok=True)
+        # Signed by a local authority rather than self-signed: BambuStudio
+        # validates the chain and answers a fatal unknown_ca alert to anything
+        # self-signed, whatever its subject or SANs say.
+        ca_cert_path = certs_dir / CA_CERT_FILENAME
+        ca_key_path = certs_dir / CA_KEY_FILENAME
+        loaded = load_ca(ca_cert_path, ca_key_path)
+        if loaded is None:
+            loaded = create_ca(ca_cert_path, ca_key_path)
+        ca_cert, ca_key = loaded
 
+        san_ips = ["127.0.0.1", "::1"]
+        if bind != "0.0.0.0":  # noqa: S104  # intentional: skip adding default bind-all to SAN
+            san_ips.append(bind)
+        # This is the address clients are told to dial, so a client that
+        # validates the certificate against it needs it listed.
+        if advertise_ip and advertise_ip not in san_ips:
+            san_ips.append(advertise_ip)
+
+        reason = None
         if not cert_path.exists() or not key_path.exists():
-            logger.info("Generating shared TLS certificate...")
-            san_ips = ["127.0.0.1", "::1"]
-            if bind != "0.0.0.0":  # noqa: S104  # intentional: skip adding default bind-all to SAN
-                san_ips.append(bind)
-            # This is the address clients are told to dial, so a client that
-            # validates the certificate against it needs it listed.
-            if advertise_ip and advertise_ip not in san_ips:
-                san_ips.append(advertise_ip)
+            reason = "no certificate yet"
+        elif not is_signed_by(cert_path, ca_cert):
+            reason = "the existing certificate is not signed by the local CA"
+        elif advertise_ip and not certificate_covers(cert_path, advertise_ip):
+            reason = f"the existing certificate does not cover {advertise_ip}"
+        elif certificate_expires_soon(cert_path):
+            reason = "the existing certificate has expired or is about to"
 
-            generate_self_signed_cert(
+        if reason:
+            logger.info("Issuing the proxy certificate: %s", reason)
+            issue_leaf(
+                ca_cert,
+                ca_key,
+                cert_path,
+                key_path,
                 common_name="PandaProxy",
                 san_dns=["localhost"],
                 san_ips=san_ips,
-                output_cert=cert_path,
-                output_key=key_path,
             )
+
+        logger.info(
+            "Slicers that verify certificates must trust %s. BambuStudio reads "
+            "its trust store from Contents/Resources/cert/printer.cer inside "
+            "its app bundle; append that file's contents there. Never copy the "
+            "matching .key.",
+            ca_cert_path,
+        )
 
         # Instantiate camera proxy if enabled
         if "camera" in services and camera_type:

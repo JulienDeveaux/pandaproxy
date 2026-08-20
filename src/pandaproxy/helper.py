@@ -248,3 +248,31 @@ async def cancel_task(task: asyncio.Task, grace: float = 2.0) -> None:
         await asyncio.wait_for(task, timeout=grace)
     with contextlib.suppress(asyncio.CancelledError):
         await task
+
+
+# Certificates are persisted across restarts, so nothing else would ever
+# notice one going stale.
+CERT_RENEWAL_MARGIN_DAYS = 30
+
+
+def certificate_expires_soon(
+    cert_path: Path, margin_days: int = CERT_RENEWAL_MARGIN_DAYS
+) -> bool:
+    """Whether the certificate has expired, or will within ``margin_days``.
+
+    Without this a persisted certificate simply dies on its expiry date: it
+    still exists and still covers the advertised address, so no other check
+    asks for a new one, and clients start refusing the proxy for a reason
+    nothing in the logs explains.
+    """
+    from cryptography import x509
+
+    try:
+        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    except OSError, ValueError:
+        # Unreadable counts as due for replacement rather than as an error.
+        return True
+    deadline = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+        days=margin_days
+    )
+    return cert.not_valid_after_utc <= deadline
