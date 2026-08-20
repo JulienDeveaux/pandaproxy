@@ -279,6 +279,33 @@ class PrinterStateCache:
 
         return json.dumps(state, separators=(",", ":")).encode("utf-8")
 
+    def firmware_version(self) -> str | None:
+        """The printer's firmware version, if the cache has seen it.
+
+        BambuStudio refuses a device whose SSDP announcement carries an empty
+        DevVersion, so the announcer needs a real value - and the printer
+        already tells us one in its get_version reply.
+        """
+        info = self._state.get("info")
+        if not isinstance(info, dict):
+            return None
+        modules = info.get("module")
+        if not isinstance(modules, list):
+            return None
+
+        # The OTA module carries the version shown as "firmware" in the UI.
+        for wanted in ("ota", "esp32"):
+            for module in modules:
+                if not isinstance(module, dict):
+                    continue
+                if module.get("name") == wanted and module.get("sw_ver"):
+                    return str(module["sw_ver"])
+        # Otherwise take the first module that reports one at all.
+        for module in modules:
+            if isinstance(module, dict) and module.get("sw_ver"):
+                return str(module["sw_ver"])
+        return None
+
     def clear(self) -> None:
         """Drop the cached state.
 

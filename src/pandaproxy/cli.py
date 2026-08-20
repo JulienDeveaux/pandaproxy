@@ -167,6 +167,7 @@ async def run_proxy(
     ssdp_targets: list[str] | None = None,
     ssdp_dev_model: str = DEFAULT_DEV_MODEL,
     ssdp_dev_name: str = DEFAULT_DEV_NAME,
+    ssdp_dev_version: str = "",
     ssdp_interval: float = DEFAULT_INTERVAL,
 ) -> None:
     """Run the proxy servers based on enabled services."""
@@ -321,6 +322,12 @@ async def run_proxy(
                 interval=ssdp_interval,
                 dev_model=ssdp_dev_model,
                 dev_name=ssdp_dev_name,
+                dev_version=ssdp_dev_version,
+                # The printer reports its own version, so the user does not
+                # have to know it - and an empty one makes Studio refuse.
+                version_provider=(
+                    mqtt_proxy.firmware_version if mqtt_proxy is not None else None
+                ),
             )
             announcer.start()
             background_tasks.append(asyncio.create_task(announcer.run()))
@@ -495,6 +502,18 @@ def main(
             envvar="SSDP_DEV_NAME",
         ),
     ] = DEFAULT_DEV_NAME,
+    ssdp_dev_version: Annotated[
+        str,
+        typer.Option(
+            "--ssdp-dev-version",
+            help=(
+                "Firmware version announced to slicers. BambuStudio refuses a "
+                "device announcing an empty one; left unset it is taken from "
+                "the printer's own MQTT reports."
+            ),
+            envvar="SSDP_DEV_VERSION",
+        ),
+    ] = "",
     ssdp_interval: Annotated[
         float,
         typer.Option(
@@ -680,6 +699,7 @@ def main(
             ssdp_targets=parsed_ssdp_targets,
             ssdp_dev_model=ssdp_dev_model,
             ssdp_dev_name=ssdp_dev_name,
+            ssdp_dev_version=ssdp_dev_version,
             ssdp_interval=ssdp_interval,
         )
     )

@@ -465,3 +465,54 @@ class TestPerSectionSnapshots:
         payload = cache.snapshots(advertise_ip="192.168.1.50")[0]
         state = json.loads(payload)
         assert decode_ipv4(state["print"]["net"]["info"][0]["ip"]) == "192.168.1.50"
+
+
+class TestFirmwareVersion:
+    """The version the SSDP announcement needs comes from the printer."""
+
+    def test_prefers_the_ota_module(self):
+        cache = PrinterStateCache()
+        cache.update(
+            json.dumps(
+                {
+                    "info": {
+                        "command": "get_version",
+                        "result": "success",
+                        "module": [
+                            {"name": "rv1126", "sw_ver": "00.00.28.55"},
+                            {"name": "ota", "sw_ver": "01.09.01.00"},
+                        ],
+                    }
+                }
+            ).encode()
+        )
+        assert cache.firmware_version() == "01.09.01.00"
+
+    def test_falls_back_to_any_module(self):
+        cache = PrinterStateCache()
+        cache.update(
+            json.dumps(
+                {"info": {"module": [{"name": "mc", "sw_ver": "1.2.3"}]}}
+            ).encode()
+        )
+        assert cache.firmware_version() == "1.2.3"
+
+    def test_none_when_nothing_reported_it(self):
+        cache = PrinterStateCache()
+        assert cache.firmware_version() is None
+        cache.update(json.dumps({"print": {"gcode_state": "IDLE"}}).encode())
+        assert cache.firmware_version() is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"info": "not-a-dict"},
+            {"info": {"module": "not-a-list"}},
+            {"info": {"module": [{"name": "ota"}]}},
+            {"info": {"module": ["junk"]}},
+        ],
+    )
+    def test_malformed_shapes_are_tolerated(self, payload):
+        cache = PrinterStateCache()
+        cache.update(json.dumps(payload).encode())
+        assert cache.firmware_version() is None

@@ -421,6 +421,14 @@ class MQTTProxy:
             if writer is not None:
                 await close_writer(writer)
 
+    def firmware_version(self) -> str | None:
+        """Firmware version as reported by the printer, if known yet.
+
+        Used for the SSDP announcement, which BambuStudio refuses when the
+        version is empty.
+        """
+        return self._state_cache.firmware_version()
+
     async def _request_pushall(self) -> None:
         """Ask the printer for a full state dump, at most one at a time.
 

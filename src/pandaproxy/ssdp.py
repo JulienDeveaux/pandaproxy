@@ -20,6 +20,10 @@ import asyncio
 import logging
 import socket
 from email.utils import formatdate
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +56,9 @@ def build_announcement(
     """Build the announcement BambuStudio accepts.
 
     ``DevInf`` is deliberately empty: putting an address in it makes
-    BambuStudio reject the device outright, which is the single reason a
-    proxy appears in the list and then fails the moment it is selected.
+    BambuStudio reject the device outright. ``DevVersion`` conversely must not
+    be empty - between them they are why a proxy appears in the list and then
+    fails the moment it is selected.
     """
     lines = [
         "HTTP/1.1 200 OK",
@@ -89,6 +94,7 @@ class SsdpAnnouncer:
         dev_model: str = DEFAULT_DEV_MODEL,
         dev_name: str = DEFAULT_DEV_NAME,
         dev_version: str = "",
+        version_provider: Callable[[], str | None] | None = None,
     ) -> None:
         self.advertise_ip = advertise_ip
         self.serial = serial
@@ -100,6 +106,10 @@ class SsdpAnnouncer:
         self.dev_model = dev_model
         self.dev_name = dev_name
         self.dev_version = dev_version
+        # BambuStudio rejects an announcement with an empty DevVersion, and the
+        # printer reports its own version over MQTT - so prefer asking rather
+        # than making the user configure it.
+        self.version_provider = version_provider
 
         self._sock: socket.socket | None = None
         self._running = False
@@ -131,6 +141,18 @@ class SsdpAnnouncer:
             self._sock = None
         logger.info("SSDP announcer stopped after %d announcements", self._sent)
 
+    def resolve_version(self) -> str:
+        """The version to announce: configured value, else whatever MQTT knows."""
+        if self.dev_version:
+            return self.dev_version
+        if self.version_provider is not None:
+            try:
+                return self.version_provider() or ""
+            except Exception as e:
+                # Never let a reporting problem stop the heartbeat.
+                logger.debug("Version provider failed: %s", e)
+        return ""
+
     def announce_once(self) -> int:
         """Send one announcement to every target. Returns how many went out."""
         if self._sock is None:
@@ -141,7 +163,7 @@ class SsdpAnnouncer:
             self.serial,
             dev_model=self.dev_model,
             dev_name=self.dev_name,
-            dev_version=self.dev_version,
+            dev_version=self.resolve_version(),
         )
         delivered = 0
         for target in self.targets:

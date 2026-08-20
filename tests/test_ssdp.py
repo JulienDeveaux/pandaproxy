@@ -148,3 +148,53 @@ class TestAnnouncerDelivery:
 
     def test_interval_default_outpaces_the_printer(self):
         assert DEFAULT_INTERVAL <= 5.0
+
+
+class TestVersionResolution:
+    """DevVersion must never go out empty."""
+
+    def test_configured_value_wins(self):
+        announcer = SsdpAnnouncer(
+            IP, SERIAL, dev_version="01.09.01.00", version_provider=lambda: "ignored"
+        )
+        assert announcer.resolve_version() == "01.09.01.00"
+
+    def test_falls_back_to_the_provider(self):
+        # BambuStudio refuses a device announcing an empty version, and the
+        # printer reports its own - so the user should not have to know it.
+        announcer = SsdpAnnouncer(IP, SERIAL, version_provider=lambda: "01.09.01.00")
+        assert announcer.resolve_version() == "01.09.01.00"
+
+    def test_a_failing_provider_does_not_break_the_heartbeat(self):
+        def boom() -> str:
+            raise RuntimeError("no state yet")
+
+        announcer = SsdpAnnouncer(IP, SERIAL, version_provider=boom)
+        assert announcer.resolve_version() == ""
+
+    def test_provider_returning_nothing_is_tolerated(self):
+        announcer = SsdpAnnouncer(IP, SERIAL, version_provider=lambda: None)
+        assert announcer.resolve_version() == ""
+
+    def test_resolved_version_reaches_the_announcement(self):
+        import socket as socket_module
+
+        import pandaproxy.ssdp as module
+
+        listener = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_DGRAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.settimeout(2)
+        original = module.SSDP_PORT
+        module.SSDP_PORT = listener.getsockname()[1]
+        try:
+            announcer = SsdpAnnouncer(
+                IP, SERIAL, targets=["127.0.0.1"], version_provider=lambda: "9.9.9.9"
+            )
+            announcer.start()
+            announcer.announce_once()
+            announcer.stop()
+            data, _ = listener.recvfrom(4096)
+            assert headers(data)["DevVersion.bambu.com"] == "9.9.9.9"
+        finally:
+            module.SSDP_PORT = original
+            listener.close()
