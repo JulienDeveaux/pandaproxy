@@ -24,6 +24,13 @@ from pandaproxy.helper import generate_self_signed_cert
 from pandaproxy.mqtt_proxy import MQTTProxy
 from pandaproxy.protocol import CERT_FILENAME, KEY_FILENAME, PRINTER_CERT_FILENAME
 from pandaproxy.rtsp_proxy import RTSPProxy
+from pandaproxy.ssdp import BROADCAST as SSDP_BROADCAST
+from pandaproxy.ssdp import (
+    DEFAULT_DEV_MODEL,
+    DEFAULT_DEV_NAME,
+    DEFAULT_INTERVAL,
+    SsdpAnnouncer,
+)
 from pandaproxy.state_cache import is_ipv4
 
 
@@ -157,12 +164,17 @@ async def run_proxy(
     advertise_ip: str | None = None,
     data_port_start: int = FTP_DATA_PORT_START,
     data_port_end: int = FTP_DATA_PORT_END,
+    ssdp_targets: list[str] | None = None,
+    ssdp_dev_model: str = DEFAULT_DEV_MODEL,
+    ssdp_dev_name: str = DEFAULT_DEV_NAME,
+    ssdp_interval: float = DEFAULT_INTERVAL,
 ) -> None:
     """Run the proxy servers based on enabled services."""
     chamber_proxy: ChamberImageProxy | None = None
     rtsp_proxy: RTSPProxy | None = None
     mqtt_proxy: MQTTProxy | None = None
     ftp_proxy: FTPProxy | None = None
+    announcer: SsdpAnnouncer | None = None
     background_tasks = []
 
     # Setup signal handlers for graceful shutdown
@@ -299,6 +311,25 @@ async def run_proxy(
         if mqtt_proxy:
             background_tasks.append(asyncio.create_task(mqtt_proxy.run_upstream_loop()))
 
+        # BambuStudio only dials addresses it has seen announced, so without
+        # this it cannot reach the proxy at all - whatever the user types.
+        if ssdp_targets and advertise_ip:
+            announcer = SsdpAnnouncer(
+                advertise_ip=advertise_ip,
+                serial=serial_number,
+                targets=ssdp_targets,
+                interval=ssdp_interval,
+                dev_model=ssdp_dev_model,
+                dev_name=ssdp_dev_name,
+            )
+            announcer.start()
+            background_tasks.append(asyncio.create_task(announcer.run()))
+        elif ssdp_targets and not advertise_ip:
+            logger.warning(
+                "SSDP targets given without --advertise-ip; announcing the "
+                "container's own address would be useless, so it is disabled"
+            )
+
         # Print startup banner
         typer.echo("\n" + "=" * 60)
         typer.echo(f"PandaProxy v{version('PandaProxy')} is running!")
@@ -346,6 +377,8 @@ async def run_proxy(
             stop_tasks.append(mqtt_proxy.stop())
         if ftp_proxy:
             stop_tasks.append(ftp_proxy.stop())
+        if announcer:
+            announcer.stop()
 
         # Stop all services concurrently
         if stop_tasks:
@@ -432,6 +465,44 @@ def main(
             envvar="FTP_DATA_PORT_END",
         ),
     ] = FTP_DATA_PORT_END,
+    ssdp_targets: Annotated[
+        str | None,
+        typer.Option(
+            "--ssdp-targets",
+            help=(
+                "Comma-separated addresses to send SSDP announcements to, so "
+                "BambuStudio can find the proxy. Usually the machines running "
+                "a slicer: a container on a Docker bridge cannot broadcast "
+                "onto the LAN but can unicast to them. Empty disables it; "
+                "'broadcast' sends to 255.255.255.255."
+            ),
+            envvar="SSDP_TARGETS",
+        ),
+    ] = None,
+    ssdp_dev_model: Annotated[
+        str,
+        typer.Option(
+            "--ssdp-dev-model",
+            help="Model code announced to slicers (C12 is the P1S)",
+            envvar="SSDP_DEV_MODEL",
+        ),
+    ] = DEFAULT_DEV_MODEL,
+    ssdp_dev_name: Annotated[
+        str,
+        typer.Option(
+            "--ssdp-dev-name",
+            help="Name shown in the slicer's device list",
+            envvar="SSDP_DEV_NAME",
+        ),
+    ] = DEFAULT_DEV_NAME,
+    ssdp_interval: Annotated[
+        float,
+        typer.Option(
+            "--ssdp-interval",
+            help="Seconds between announcements; must outpace the printer's own",
+            envvar="SSDP_INTERVAL",
+        ),
+    ] = DEFAULT_INTERVAL,
     advertise_ip: Annotated[
         str | None,
         typer.Option(
@@ -540,6 +611,12 @@ def main(
         )
         raise typer.Exit(1)
 
+    parsed_ssdp_targets = [
+        part.strip() for part in (ssdp_targets or "").split(",") if part.strip()
+    ]
+    if parsed_ssdp_targets == ["broadcast"]:
+        parsed_ssdp_targets = [SSDP_BROADCAST]
+
     typer.echo(f"Connecting to printer at {printer_ip}...")
     typer.echo(f"Enabled services: {', '.join(sorted(enabled_services))}")
 
@@ -600,6 +677,10 @@ def main(
             advertise_ip=advertise_ip,
             data_port_start=data_port_start,
             data_port_end=data_port_end,
+            ssdp_targets=parsed_ssdp_targets,
+            ssdp_dev_model=ssdp_dev_model,
+            ssdp_dev_name=ssdp_dev_name,
+            ssdp_interval=ssdp_interval,
         )
     )
 

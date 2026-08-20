@@ -6,12 +6,22 @@ services:
       # Ports 322 and 990 are privileged; the image runs as non-root.
       - NET_BIND_SERVICE
     ports:
+      # MQTT
       - "8883:8883/tcp"
+      # FTPS control, then the passive data range it hands out
       - "990:990/tcp"
       - "2000-2019:2000-2019/tcp"
+      # Chamber camera (A1/P1/P1S)
       - "6000:6000/tcp"
-      # RTSP camera (X1/H2/P2 only) - drop on a P1S
-      - "322:322/tcp"
+      # No 322 here: RTSP is X1/H2/P2 only. Add it back for those models.
+    # Two settings in .env decide whether this works at all:
+    #   ADVERTISE_IP  - the Docker host's LAN address. In bridge mode the
+    #                   container's own address is unreachable, so PASV
+    #                   replies and the MQTT-reported printer address must
+    #                   name the host instead.
+    #   SSDP_TARGETS  - the machines running a slicer. BambuStudio only dials
+    #                   addresses it has seen announced on UDP 2021, and a
+    #                   bridged container cannot broadcast onto the LAN.
     env_file: .env
     volumes:
       - ./certs:/app/certs

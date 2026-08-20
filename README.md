@@ -105,17 +105,17 @@ pandaproxy --help
 
 ```bash
 # Camera only (default) - camera type is automatically detected
-pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001
+pandaproxy -p 10.0.0.100 -a 12345678 -s 01P00A000000001
 
 # Enable all services (camera, mqtt, ftp)
-pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 --enable-all
+pandaproxy -p 10.0.0.100 -a 12345678 -s 01P00A000000001 --enable-all
 
 # Enable specific services
-pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 --services camera,mqtt
+pandaproxy -p 10.0.0.100 -a 12345678 -s 01P00A000000001 --services camera,mqtt
 
 
 # Verbose logging
-pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 -v
+pandaproxy -p 10.0.0.100 -a 12345678 -s 01P00A000000001 -v
 ```
 
 ### CLI Options
@@ -129,10 +129,34 @@ pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 -v
 | `--services`      |       | `SERVICES`           | Comma-separated services: camera,mqtt,ftp                 |
 | `--enable-all`    |       | `ENABLE_ALL`         | Enable all services                                       |
 | `--advertise-ip`  |       | `ADVERTISE_IP`       | Address to advertise to clients (see below)                |
+| `--ssdp-targets`  |       | `SSDP_TARGETS`       | Where to announce the proxy so slicers can find it         |
+| `--ssdp-dev-model`|       | `SSDP_DEV_MODEL`     | Model code announced (default: C12, the P1S)               |
+| `--ssdp-dev-name` |       | `SSDP_DEV_NAME`      | Name shown in the slicer's device list                     |
+| `--ssdp-interval` |       | `SSDP_INTERVAL`      | Seconds between announcements (default: 2)                 |
 | `--data-port-start`|      | `FTP_DATA_PORT_START`| First passive FTP data port (default: 2000)                |
 | `--data-port-end` |       | `FTP_DATA_PORT_END`  | Last passive FTP data port (default: 2019)                 |
 | `--cert`          |       | `PRINTER_CERT`       | Path to the printer CA certificate (default: printer.cer) |
 | `--verbose`       | `-v`  |                      | Enable debug logging                                      |
+
+### Letting BambuStudio find the proxy
+
+BambuStudio populates its LAN device list **only** from SSDP announcements
+received on UDP 2021, and then dials the address the announcement names.
+Typing an address by hand is not enough: the proxy stays invisible, and
+selecting the printer fails instantly with `code -1` without a socket even
+being opened. Set `SSDP_TARGETS` to the machines running a slicer and the
+proxy announces itself to them.
+
+A bridged container cannot broadcast onto the LAN, which is why the targets
+are listed explicitly rather than broadcast; pass `broadcast` instead when the
+container has its own LAN address (host or macvlan networking).
+
+ha-bambulab and other clients have no such constraint - they dial whatever
+they are configured with, so this only matters for slicers.
+
+The real printer keeps announcing its own address under the same serial, so
+the two compete for the same entry. Announcing more often than it does
+(`SSDP_INTERVAL`, default 2s) wins in practice, but it is a race.
 
 ### Advertising the right address
 
@@ -150,7 +174,7 @@ The proxy logs a warning if it detects Docker and the option is unset.
 All options can be set via environment variables:
 
 ```bash
-export PRINTER_IP=192.168.1.100
+export PRINTER_IP=10.0.0.100
 export ACCESS_CODE=12345678
 export SERIAL_NUMBER=01P00A000000001
 export BIND_ADDRESS=0.0.0.0
@@ -181,10 +205,10 @@ Or run directly:
 
 ```bash
 docker run -d \
-  -e PRINTER_IP=192.168.1.100 \
+  -e PRINTER_IP=10.0.0.100 \
   -e ACCESS_CODE=12345678 \
   -e SERIAL_NUMBER=01P00A000000001 \
-  -e ADVERTISE_IP=192.168.1.10 \
+  -e ADVERTISE_IP=10.0.0.10 \
   -e ENABLE_ALL=1 \
   -p 8883:8883 \
   -p 990:990 \
@@ -219,7 +243,7 @@ rtsps://bblp:<access_code>@<proxy-ip>:322/stream
 Example with VLC:
 
 ```bash
-vlc rtsps://bblp:12345678@192.168.1.50:322/stream
+vlc rtsps://bblp:12345678@10.0.0.50:322/stream
 ```
 
 ### MQTT (All printers)
@@ -232,7 +256,7 @@ Connect to `<proxy-ip>:8883` using MQTTS (MQTT over TLS):
 Example with mosquitto_sub:
 
 ```bash
-mosquitto_sub -h 192.168.1.50 -p 8883 \
+mosquitto_sub -h 10.0.0.50 -p 8883 \
   --cafile /path/to/ca.crt --insecure \
   -u bblp -P 12345678 \
   -t "device/01P00A000000001/report"
@@ -248,7 +272,7 @@ Connect to `<proxy-ip>:990` using implicit FTPS:
 Example with lftp:
 
 ```bash
-lftp -u bblp,12345678 ftps://192.168.1.50:990
+lftp -u bblp,12345678 ftps://10.0.0.50:990
 ```
 
 ## Architecture
@@ -293,7 +317,7 @@ cannot read the printer's `227 Entering Passive Mode` reply, which advertises
 the *printer's* address - the client connects there directly and bypasses the
 proxy. Its own CLI banner said `active mode only`. This fork terminates TLS on
 both sides and rewrites `PASV`/`EPSV`. Against a P1S: the printer offered
-`192.168.1.18:2024`, the client got the proxy's port, the transfer completed.
+`10.0.0.18:2024`, the client got the proxy's port, the transfer completed.
 
 **A queue, with the login answered locally.** The printer accepts very few
 concurrent FTP sessions, and a client arriving when they are exhausted just
