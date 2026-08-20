@@ -2,12 +2,14 @@
 
 BambuLab Multi-Service Proxy - Proxy camera, MQTT, and FTP from BambuLab printers to multiple clients.
 
-[![Latest Release](https://gitlab.com/nerdycraft/pandaproxy/-/badges/release.svg)](https://gitlab.com/nerdycraft/pandaproxy/-/releases)
-[![pipeline status](https://gitlab.com/nerdycraft/pandaproxy/badges/main/pipeline.svg)](https://gitlab.com/nerdycraft/pandaproxy/-/commits/main)
-[![coverage report](https://gitlab.com/nerdycraft/pandaproxy/badges/main/coverage.svg)](https://gitlab.com/nerdycraft/pandaproxy/-/commits/main)
+[![build](https://github.com/JulienDeveaux/pandaproxy/actions/workflows/docker.yml/badge.svg)](https://github.com/JulienDeveaux/pandaproxy/actions/workflows/docker.yml)
 ![AI-Powered](https://img.shields.io/badge/Developed%20with-AI-blue?style=for-the-badge&logo=claude&logoColor=white)
 
 > **⚠️ Alpha Software** - This project is heavily under development and very much in an alpha state. Expect bugs, breaking changes, and incomplete features.
+
+> **Fork** of [gitlab.com/nerdycraft/pandaproxy](https://gitlab.com/nerdycraft/pandaproxy),
+> adding passive-mode FTPS with a queue, and a merged MQTT state cache.
+> See [What this fork changes](#what-this-fork-changes).
 
 ## About This Project
 
@@ -49,8 +51,10 @@ These services have limited simultaneous connection support. PandaProxy acts as 
 - **Automatic camera type detection** - no manual configuration needed
 - **Chamber image proxy** (port 6000) for A1/P1 printers with TLS
 - **RTSP proxy** (port 322) for X1/H2/P2 printers using FFmpeg + MediaMTX
-- **MQTT proxy** (port 8883) for printer control and status with TLS
-- **FTP proxy** (port 990) for file uploads with implicit TLS
+- **MQTT proxy** (port 8883) with a merged state cache, so a late client gets
+  full state without asking the printer for its own `pushall`
+- **FTP proxy** (port 990, implicit TLS) with passive mode and a queue that
+  serialises access to the printer
 - Same authentication (access code) as the printer
 - Automatic reconnection on connection loss
 - Docker support with Alpine-based image
@@ -74,9 +78,12 @@ These services have limited simultaneous connection support. PandaProxy acts as 
 ### Using uv (recommended)
 
 ```bash
-# Clone the repository
-git clone https://gitlab.com/nerdycraft/pandaproxy.git
+# Clone this fork
+git clone https://github.com/JulienDeveaux/pandaproxy.git
 cd pandaproxy
+
+# Track upstream so changes can be pulled in later
+git remote add upstream https://gitlab.com/nerdycraft/pandaproxy.git
 
 # Install with uv
 uv sync
@@ -121,8 +128,22 @@ pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 -v
 | `--bind`          | `-b`  | `BIND_ADDRESS`       | Address to bind proxy servers (default: 0.0.0.0)          |
 | `--services`      |       | `SERVICES`           | Comma-separated services: camera,mqtt,ftp                 |
 | `--enable-all`    |       | `ENABLE_ALL`         | Enable all services                                       |
+| `--advertise-ip`  |       | `ADVERTISE_IP`       | Address to advertise to clients (see below)                |
+| `--data-port-start`|      | `FTP_DATA_PORT_START`| First passive FTP data port (default: 2000)                |
+| `--data-port-end` |       | `FTP_DATA_PORT_END`  | Last passive FTP data port (default: 2019)                 |
 | `--cert`          |       | `PRINTER_CERT`       | Path to the printer CA certificate (default: printer.cer) |
 | `--verbose`       | `-v`  |                      | Enable debug logging                                      |
+
+### Advertising the right address
+
+The proxy tells clients where to find the "printer": in FTP `PASV` replies, and
+in the printer address carried by MQTT reports. By default it uses the address
+the client connected to, which is correct on host or macvlan networking.
+
+**Under Docker bridge networking that address is the container's own private
+address**, which no LAN client can reach - passive transfers and slicer uploads
+would be sent nowhere. Set `ADVERTISE_IP` to the Docker host's LAN address.
+The proxy logs a warning if it detects Docker and the option is unset.
 
 ### Environment Variables
 
@@ -148,12 +169,13 @@ cp .env.example .env
 # Edit with your printer details
 nano .env
 
-# Run with Docker Compose
+# Run
 docker compose up -d
-
-# View logs
 docker compose logs -f
 ```
+
+`compose.yaml` publishes ports on the Docker host. It ends with a commented
+macvlan block if you would rather give the proxy its own LAN address.
 
 Or run directly:
 
@@ -162,13 +184,22 @@ docker run -d \
   -e PRINTER_IP=192.168.1.100 \
   -e ACCESS_CODE=12345678 \
   -e SERIAL_NUMBER=01P00A000000001 \
+  -e ADVERTISE_IP=192.168.1.10 \
   -e ENABLE_ALL=1 \
-  -p 322:322 \
-  -p 6000:6000 \
   -p 8883:8883 \
   -p 990:990 \
-  pandaproxy:latest
+  -p 2000-2019:2000-2019 \
+  -p 6000:6000 \
+  ghcr.io/juliendeveaux/pandaproxy:latest
 ```
+
+`ADVERTISE_IP` is the Docker **host's** LAN address, not the container's:
+published ports mean bridge networking, where the container's own address is
+unreachable. `2000-2019` carries passive FTP data connections; omit it and
+every transfer fails after the control channel connected. The range is sized
+for concurrent *clients*, not transfers: a port is reserved when `PASV` is
+answered, so a client still waiting its turn in the queue already holds one. Drop `-p 322:322`
+on a P1S.
 
 ## Connecting Clients
 
@@ -244,10 +275,79 @@ lftp -u bblp,12345678 ftps://192.168.1.50:990
    - Forwards traffic bidirectionally to printer's MQTT broker
    - Transparently handles MQTT traffic
 
-3. **FTP Proxy**: Pure Python asyncio FTPS proxy
-   - Accepts implicit TLS connections
-   - Supports active mode transfers (client-to-printer uploads)
-   - Passive mode is not supported
+3. **FTP Proxy**: speaks FTP rather than relaying bytes, terminating TLS on
+   both sides
+   - Rewrites `PASV`/`EPSV` to point back at the proxy
+   - Answers the login itself, then queues until a printer slot frees up, so
+     clients wait instead of failing
+   - Uploads outrank listings; an idle session releases its slot and
+     reattaches on the next command
+
+## What this fork changes
+
+All three target one symptom: BambuStudio failing to send a model with a
+generic network error while other clients are talking to the printer.
+
+**A real FTPS proxy instead of a byte relay.** Upstream forwards raw TCP, so it
+cannot read the printer's `227 Entering Passive Mode` reply, which advertises
+the *printer's* address - the client connects there directly and bypasses the
+proxy. Its own CLI banner said `active mode only`. This fork terminates TLS on
+both sides and rewrites `PASV`/`EPSV`. Against a P1S: the printer offered
+`192.168.1.18:2024`, the client got the proxy's port, the transfer completed.
+
+**A queue, with the login answered locally.** The printer accepts very few
+concurrent FTP sessions, and a client arriving when they are exhausted just
+gets a connection failure. The proxy now answers the greeting and login itself,
+then queues until a slot frees up, so a client waits inside its first command
+instead of erroring. Uploads are served before listings: a failed upload costs
+a manual retry, an interrupted listing is refetched unnoticed. An idle session
+releases its slot after 30s and reattaches on the next command, replaying the
+settings the client had set. Measured with three concurrent clients: 3.7s,
+7.2s, 10.7s - one session on the printer at a time.
+
+Passive requests are answered locally and the printer is only contacted when
+the transfer command arrives. That is what makes the upload priority reachable
+at all - a slot taken by the `PASV` that precedes every `STOR` could only ever
+be claimed at normal priority - and it means a client that asks for a port and
+then disappears never opens a printer session.
+
+**A merged MQTT state cache.** The printer sends full state only in reply to a
+`pushall`; everything after is a small delta. A late client would have to ask
+for its own dump, so N clients meant N dumps - the load a proxy should remove.
+The proxy issues one `pushall` per upstream connection, merges the deltas, and
+replays a full report to each new subscriber. The cache is dropped when
+upstream is lost, since a stale snapshot is worse than none.
+
+It also rewrites `net.info[*].ip`, where the printer reports its own address as
+a little-endian uint32. Slicers read it to pick an upload target, so leaving it
+alone would let a client bypass the queue. Each client is told the address it
+reached the proxy on.
+
+### Known gaps
+
+No real client has been driven through this proxy yet - it has been exercised
+with `ftplib` and `paho` against a live P1S, not with BambuStudio, ha-bambulab
+or PrintGuard. The camera fan-out is untouched upstream code. Long-running
+behaviour (reconnects, leaks, sustained queueing) is unverified.
+
+The proxy is IPv4-only where it matters: the printer reports its own address
+as an IPv4 uint32 and `PASV` can only express IPv4, so a client reaching the
+proxy over genuine IPv6 is refused. IPv4 clients on a dual-stack listener are
+fine - their mapped addresses are unwrapped. Set `ADVERTISE_IP` if you bind
+`::` and want a definite address.
+
+The passive data ports accept only the address holding the control session,
+but under Docker bridge networking the userland proxy rewrites the source of
+both connections to the bridge gateway, so that check cannot discriminate
+there. It is effective on host and macvlan networking; everywhere, only one
+connection per passive port is admitted.
+
+The data channel is relayed as raw bytes, so a `PROT P` client negotiates TLS
+with the **printer**, not the proxy. A P1S was measured not to require session
+reuse there, which is what makes the relay viable - but a client that itself
+insists on reusing the control session, or on the certificate matching the
+host it dialled, would fail on the data channel while the control channel
+worked. `ftplib` does not; lftp and BambuStudio have not been tested.
 
 ## Service Ports
 
@@ -257,6 +357,12 @@ lftp -u bblp,12345678 ftps://192.168.1.50:990
 | Camera (A1/P1)    | 6000         | 6000       | TLS Binary    |
 | MQTT              | 8883         | 8883       | MQTTS         |
 | FTP Control       | 990          | 990        | Implicit FTPS |
+| FTP Data (PASV)   | assigned     | 2000-2019  | TCP relay     |
+
+The passive data range must be reachable, or transfers fail after the control
+channel has already connected. On Docker's bridge network, publish it
+(`-p 2000-2019:2000-2019`) and set `ADVERTISE_IP`. `compose.yaml` publishes
+the range; `ADVERTISE_IP` goes in your `.env`.
 
 ## Printer Model Support
 
@@ -291,7 +397,11 @@ lftp -u bblp,12345678 ftps://192.168.1.50:990
 - Ensure the printer has LAN Mode enabled
 - Check if port 990 is accessible on the printer
 - Use implicit FTPS mode (not explicit FTPS)
-- Use active mode (PORT) for data transfers - passive mode is not supported
+- Passive mode works, but the data range (2000-2019) must be reachable.
+  Transfers failing after a successful login is usually an unpublished range
+- `ftplib.FTP_TLS.storbinary` hangs against BambuLab firmware, which never
+  answers the data channel's TLS `close_notify` (with or without the proxy).
+  Use `transfercmd` + `sendall` + `close` + `voidresp` instead
 
 ### Privileged ports (322, 990, 6000)
 

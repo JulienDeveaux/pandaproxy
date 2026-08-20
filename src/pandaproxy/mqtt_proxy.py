@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
+import json
 import logging
 import ssl
 from typing import TYPE_CHECKING
@@ -44,8 +46,39 @@ from pandaproxy.mqtt_protocol import (
     read_packet,
 )
 from pandaproxy.protocol import MQTT_PORT, PRINTER_CERT_FILENAME
+from pandaproxy.state_cache import (
+    PrinterStateCache,
+    as_ipv4,
+    payload_is_full_state,
+    payload_reports_ip,
+    rewrite_reported_ip,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def topic_matches(topic_filter: str, topic: str) -> bool:
+    """Return whether an MQTT topic filter matches a concrete topic name.
+
+    Implements the '+' (single level) and '#' (multi level) wildcards.
+    """
+    if topic_filter == topic:
+        return True
+
+    filter_levels = topic_filter.split("/")
+    topic_levels = topic.split("/")
+
+    for i, level in enumerate(filter_levels):
+        if level == "#":
+            # '#' is only legal as the last level and matches the remainder.
+            return i == len(filter_levels) - 1
+        if i >= len(topic_levels):
+            return False
+        if level != "+" and level != topic_levels[i]:
+            return False
+
+    return len(filter_levels) == len(topic_levels)
+
 
 # Keepalive interval for the upstream printer connection (seconds)
 UPSTREAM_KEEPALIVE = 60
@@ -65,6 +98,22 @@ UPSTREAM_CONNECT_TIMEOUT = 10.0
 # How long clients wait for upstream to become available
 UPSTREAM_WAIT_TIMEOUT = 30.0
 
+# Sent once per upstream connection to prime the state cache; otherwise every
+# client sends its own, costing N full state dumps instead of one.
+# How long a subscribing client waits for a full dump before giving up and
+# letting the client ask for its own.
+CACHE_PRIMING_TIMEOUT = 12.0
+
+# Minimum spacing between full-state requests, so simultaneous subscribers
+# collapse into one instead of each asking the printer. Deliberately shorter
+# than CACHE_PRIMING_TIMEOUT: a QoS 0 request can be lost, and a waiter must
+# be able to re-ask within its own wait rather than time out first.
+PUSHALL_RETRY_INTERVAL = 4.0
+
+PUSHALL_PAYLOAD = json.dumps(
+    {"pushing": {"sequence_id": "0", "command": "pushall"}}
+).encode("utf-8")
+
 
 class MQTTProxy:
     """MQTT multiplexing proxy for BambuLab printers.
@@ -82,6 +131,7 @@ class MQTTProxy:
         key_path: Path,
         bind_address: str = "0.0.0.0",  # noqa: S104  # pandaproxy binds all interfaces by design
         printer_cert_path: Path | str = PRINTER_CERT_FILENAME,
+        advertise_ip: str | None = None,
     ) -> None:
         self.printer_ip = printer_ip
         self.access_code = access_code
@@ -91,6 +141,24 @@ class MQTTProxy:
         self.bind_address = bind_address
         self.printer_cert_path = printer_cert_path
         self.port = MQTT_PORT
+        self.report_topic = f"device/{serial_number}/report"
+        self.request_topic = f"device/{serial_number}/request"
+        # Address advertised in print.net.info[*].ip. Without an explicit
+        # value the socket's own address is used, which is the container's
+        # private address under Docker bridge networking - unreachable for
+        # every LAN client.
+        self.advertise_ip = advertise_ip
+
+        # Merged printer state, replayed to each new subscriber
+        self._state_cache = PrinterStateCache()
+        # Set once the priming pushall reply has been merged. Subscribers wait
+        # briefly on it rather than being handed an empty cache.
+        self._cache_primed = asyncio.Event()
+        # Snapshot replays run detached so they cannot stall a client's loop.
+        self._snapshot_tasks: set[asyncio.Task] = set()
+        # Collapses simultaneous full-state requests into one.
+        self._pushall_pending = False
+        self._pushall_timer: asyncio.TimerHandle | None = None
 
         self._running = False
         self._server: asyncio.Server | None = None
@@ -103,6 +171,13 @@ class MQTTProxy:
 
         # Client tracking: client_id -> asyncio.Queue
         self._clients: dict[str, asyncio.Queue[bytes | None]] = {}
+        # client_id -> local address it reached us on, so we can tell it
+        # where the "printer" lives and keep it using the proxy.
+        self._client_ips: dict[str, str] = {}
+        # Needed to actually hang up on a client that cannot keep up: its
+        # queue is full by definition at that point, so a sentinel cannot get
+        # through it.
+        self._client_writers: dict[str, asyncio.StreamWriter] = {}
         self._clients_lock = asyncio.Lock()
 
     async def start(self) -> None:
@@ -147,6 +222,12 @@ class MQTTProxy:
                 with contextlib.suppress(asyncio.QueueFull):
                     queue.put_nowait(None)
 
+        snapshots = list(self._snapshot_tasks)
+        for task in snapshots:
+            task.cancel()
+        if snapshots:
+            await asyncio.gather(*snapshots, return_exceptions=True)
+
         # 3. Close the TLS server (stop accepting new connections)
         if self._server:
             self._server.close()
@@ -157,6 +238,13 @@ class MQTTProxy:
             self._upstream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._upstream_task
+
+        # 5. Only now can nothing broadcast any more. Clearing these earlier
+        # meant a report arriving mid-shutdown went out unrewritten, naming
+        # the printer, and a saturated client could no longer be hung up.
+        async with self._clients_lock:
+            self._client_ips.clear()
+            self._client_writers.clear()
 
         logger.info("MQTT proxy stopped")
 
@@ -193,13 +281,18 @@ class MQTTProxy:
                     identifier=f"pandaproxy-{self.serial_number}",
                 ) as client:
                     self._upstream_client = client
-                    report_topic = f"device/{self.serial_number}/report"
-                    await client.subscribe(report_topic)
+                    await client.subscribe(self.report_topic)
                     self._upstream_connected.set()
                     logger.info(
                         "Connected to printer MQTT broker (subscribed to %s)",
-                        report_topic,
+                        self.report_topic,
                     )
+
+                    # Deltas alone never let a late subscriber build a full
+                    # picture, so prime the cache with one full dump. Routed
+                    # through _request_pushall so a subscriber arriving before
+                    # the reply does not ask for a second one.
+                    await self._request_pushall()
 
                     async for message in client.messages:
                         logger.debug(
@@ -212,13 +305,21 @@ class MQTTProxy:
                                 else b""
                             ),
                         )
-                        packet = build_publish(
-                            str(message.topic),
+                        payload = (
                             message.payload
                             if isinstance(message.payload, bytes)
-                            else b"",
+                            else b""
                         )
-                        await self._broadcast_to_clients(packet)
+                        topic = str(message.topic)
+                        if topic == self.report_topic:
+                            merged = self._state_cache.update(payload)
+                            # Both conditions: a payload can look like a full
+                            # dump and still be rejected (oversized, or nothing
+                            # but an ack), and priming on it would relabel a
+                            # partial cache as complete.
+                            if merged and payload_is_full_state(payload):
+                                self._cache_primed.set()
+                        await self._broadcast_report(topic, payload)
 
             except aiomqtt.MqttError as e:
                 logger.warning("Upstream MQTT connection error: %s", e)
@@ -230,6 +331,11 @@ class MQTTProxy:
             finally:
                 self._upstream_connected.clear()
                 self._upstream_client = None
+                # A snapshot that stopped being refreshed would hand a new
+                # client state frozen at disconnect time.
+                self._state_cache.clear()
+                self._cache_primed.clear()
+                self._clear_pushall_pending()
 
             if self._running:
                 logger.info("Reconnecting to printer in %d seconds...", RECONNECT_DELAY)
@@ -255,20 +361,171 @@ class MQTTProxy:
     # Client broadcast
     # ------------------------------------------------------------------
 
+    async def _broadcast_report(self, topic: str, payload: bytes) -> None:
+        """Relay a printer message to every client.
+
+        Reports carrying the printer's own address are rebuilt per client,
+        since each may reach the proxy on a different one. That is rare - only
+        full dumps mention the network - so the common path shares one packet.
+        """
+        if not payload_reports_ip(payload):
+            await self._broadcast_to_clients(build_publish(topic, payload))
+            return
+
+        try:
+            state = json.loads(payload)
+        except json.JSONDecodeError, UnicodeDecodeError:
+            await self._broadcast_to_clients(build_publish(topic, payload))
+            return
+
+        if not isinstance(state, dict):
+            # Rewriting expects an object; anything else is relayed as-is
+            # rather than raising and taking the upstream connection down.
+            await self._broadcast_to_clients(build_publish(topic, payload))
+            return
+
+        async with self._clients_lock:
+            targets = list(self._clients.items())
+
+        for client_id, queue in targets:
+            local_ip = self._client_ips.get(client_id)
+            if local_ip:
+                personalised = copy.deepcopy(state)
+                rewrite_reported_ip(personalised, local_ip)
+                data = json.dumps(personalised, separators=(",", ":")).encode()
+            else:
+                data = payload
+            await self._deliver(client_id, queue, build_publish(topic, data))
+
     async def _broadcast_to_clients(self, packet: bytes) -> None:
         """Put a packet into every connected client's queue."""
         async with self._clients_lock:
-            disconnected: list[str] = []
-            for client_id, queue in self._clients.items():
-                try:
-                    queue.put_nowait(packet)
-                except asyncio.QueueFull:
-                    logger.warning("Client %s queue full, disconnecting", client_id)
-                    with contextlib.suppress(asyncio.QueueFull):
-                        queue.put_nowait(None)
-                    disconnected.append(client_id)
-            for client_id in disconnected:
+            targets = list(self._clients.items())
+        for client_id, queue in targets:
+            await self._deliver(client_id, queue, packet)
+
+    async def _deliver(
+        self, client_id: str, queue: asyncio.Queue[bytes | None], packet: bytes
+    ) -> None:
+        """Queue one packet for one client, dropping it if it cannot keep up."""
+        try:
+            queue.put_nowait(packet)
+        except asyncio.QueueFull:
+            logger.warning("Client %s cannot keep up, disconnecting it", client_id)
+            async with self._clients_lock:
                 self._clients.pop(client_id, None)
+                self._client_ips.pop(client_id, None)
+                writer = self._client_writers.pop(client_id, None)
+            # Closing the socket is what actually ends both loops: the queue is
+            # full, so no sentinel could ever reach the send loop.
+            if writer is not None:
+                await close_writer(writer)
+
+    async def _request_pushall(self) -> None:
+        """Ask the printer for a full state dump, at most one at a time.
+
+        Several clients reconnecting together would otherwise each ask, which
+        is the load this cache exists to remove.
+        """
+        if self._pushall_pending:
+            return
+
+        # Set before the await, or two subscribers both pass the check and the
+        # printer produces the N dumps this cache exists to avoid.
+        self._pushall_pending = True
+        if not await self._publish_pushall():
+            # Nothing went out, so nothing to wait for: stay re-askable rather
+            # than muzzling retries for the next interval.
+            self._pushall_pending = False
+            return
+
+        # A QoS 0 request can simply be lost, so it must become re-askable
+        # even if no reply ever arrives. The handle is kept so a reconnect can
+        # drop it instead of letting it clear a fresh flag.
+        self._pushall_timer = asyncio.get_running_loop().call_later(
+            PUSHALL_RETRY_INTERVAL, self._clear_pushall_pending
+        )
+
+    def _clear_pushall_pending(self) -> None:
+        """Make a full-state request askable again, dropping any timer."""
+        self._pushall_pending = False
+        # Cancel, do not merely forget: a surviving handle would later clear a
+        # flag armed by a fresh request and let every subscriber ask again.
+        if self._pushall_timer is not None:
+            self._pushall_timer.cancel()
+            self._pushall_timer = None
+
+    async def _publish_pushall(self) -> bool:
+        """Publish one pushall request. False if nothing went out."""
+        async with self._upstream_lock:
+            client = self._upstream_client
+            if client is None:
+                return False
+            try:
+                await client.publish(self.request_topic, PUSHALL_PAYLOAD, qos=0)
+            except aiomqtt.MqttError as e:
+                logger.warning("Could not request a full state dump: %s", e)
+                return False
+        return True
+
+    async def _send_state_snapshot(self, client_id: str) -> None:
+        """Replay the merged printer state to a client that just subscribed,
+        so it need not ask the printer for its own ``pushall``."""
+        if not self._cache_primed.is_set():
+            # The priming pushall is usually still in flight when a client
+            # subscribes right after startup. It is published at QoS 0 and can
+            # simply be lost, so re-ask across the wait instead of asking once
+            # and hoping - a single attempt made this retry path dead code.
+            deadline = asyncio.get_running_loop().time() + CACHE_PRIMING_TIMEOUT
+            while not self._cache_primed.is_set():
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                await self._request_pushall()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        self._cache_primed.wait(),
+                        timeout=min(PUSHALL_RETRY_INTERVAL, remaining),
+                    )
+
+        if not self._cache_primed.is_set():
+            # Only a full dump can be replayed as one. Saying nothing lets the
+            # client request its own; handing it a delta dressed up as full
+            # state would leave it silently missing most fields.
+            logger.info(
+                "No full state yet, %s will have to ask the printer itself",
+                client_id,
+            )
+            return
+
+        # Resolve the queue *before* serialising: an await between building
+        # the snapshot and queueing it lets a newer delta jump ahead, and the
+        # client would then apply the older full document over it and regress.
+        async with self._clients_lock:
+            queue = self._clients.get(client_id)
+            advertised = self._client_ips.get(client_id)
+        if queue is None:
+            return
+
+        snapshots = self._state_cache.snapshots(advertise_ip=advertised)
+        if not snapshots:
+            logger.debug(
+                "No cached state yet, client %s will wait for the next report",
+                client_id,
+            )
+            return
+
+        for payload in snapshots:
+            await self._deliver(
+                client_id, queue, build_publish(self.report_topic, payload)
+            )
+        logger.info(
+            "Replayed cached state to %s (%d report(s), %d bytes, %d merged)",
+            client_id,
+            len(snapshots),
+            sum(len(p) for p in snapshots),
+            self._state_cache.update_count,
+        )
 
     # ------------------------------------------------------------------
     # Client connection handling
@@ -330,8 +587,26 @@ class MQTTProxy:
 
             # --- Register client queue ---
             queue = asyncio.Queue(maxsize=CLIENT_QUEUE_SIZE)
+            sockname = writer.get_extra_info("sockname")
+            raw_address = self.advertise_ip or (sockname[0] if sockname else None)
+            # Unwrap ::ffff:a.b.c.d: a dual-stack listener reports ordinary
+            # IPv4 peers that way, and refusing them dropped every client.
+            advertised = as_ipv4(raw_address) if raw_address else None
+            if not advertised:
+                # The printer reports its address as an IPv4 uint32, so a
+                # non-IPv4 value cannot be rewritten and the report would go
+                # out naming the printer - the bypass this exists to prevent.
+                # Refusing is the safe failure.
+                logger.error(
+                    "No IPv4 address to advertise to %s (got %r); set --advertise-ip",
+                    peer,
+                    raw_address,
+                )
+                return
             async with self._clients_lock:
                 self._clients[client_id] = queue
+                self._client_writers[client_id] = writer
+                self._client_ips[client_id] = advertised
 
             # --- Run bidirectional forwarding ---
             keepalive = connect_info.keepalive
@@ -360,6 +635,8 @@ class MQTTProxy:
             if queue is not None:
                 async with self._clients_lock:
                     self._clients.pop(client_id, None)
+                    self._client_ips.pop(client_id, None)
+                    self._client_writers.pop(client_id, None)
             await close_writer(writer)
             logger.info("Connection from %s closed", peer)
 
@@ -416,6 +693,19 @@ class MQTTProxy:
                         writer.write(build_suback(pkt_id, [0] * len(topics)))
                         await writer.drain()
                         logger.debug("Client %s subscribed to %s", client_id, topics)
+
+                        if any(
+                            topic_matches(f, self.report_topic) for f, _qos in topics
+                        ):
+                            # As a task: this can wait seconds for the priming
+                            # dump, and PINGREQ must keep being answered.
+                            snapshot_task = asyncio.create_task(
+                                self._send_state_snapshot(client_id)
+                            )
+                            self._snapshot_tasks.add(snapshot_task)
+                            snapshot_task.add_done_callback(
+                                self._snapshot_tasks.discard
+                            )
 
                     case PacketType.UNSUBSCRIBE:
                         pkt_id, topics = parse_unsubscribe(pkt.payload)

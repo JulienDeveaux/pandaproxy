@@ -15,11 +15,16 @@ import typer
 
 from pandaproxy.chamber_proxy import ChamberImageProxy
 from pandaproxy.detection import detect_camera_type
-from pandaproxy.ftp_proxy import FTPProxy
+from pandaproxy.ftp_proxy import (
+    FTP_DATA_PORT_END,
+    FTP_DATA_PORT_START,
+    FTPProxy,
+)
 from pandaproxy.helper import generate_self_signed_cert
 from pandaproxy.mqtt_proxy import MQTTProxy
 from pandaproxy.protocol import CERT_FILENAME, KEY_FILENAME, PRINTER_CERT_FILENAME
 from pandaproxy.rtsp_proxy import RTSPProxy
+from pandaproxy.state_cache import is_ipv4
 
 
 def resolve_file_env_var(var: str) -> None:
@@ -101,6 +106,26 @@ def parse_services(services_str: str | None, enable_all: bool) -> set[str]:
     return services
 
 
+def certificate_covers(cert_path: Path, address: str) -> bool:
+    """Whether an existing certificate lists ``address`` in its SANs.
+
+    The certificate is deliberately persisted across restarts, so adding
+    ADVERTISE_IP later must not leave clients validating against a name the
+    certificate never claimed.
+    """
+    try:
+        from cryptography import x509
+
+        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        return address in {str(ip) for ip in san.get_values_for_type(x509.IPAddress)}
+    except Exception as e:
+        # An unreadable or SAN-less certificate is treated as not covering it,
+        # so it gets regenerated rather than silently kept.
+        logger.warning("Could not inspect %s: %s", cert_path, e)
+        return False
+
+
 def is_running_in_docker() -> bool:
     """Check if the application is running inside a Docker container."""
     # Check for the existence of .dockerenv file
@@ -129,6 +154,9 @@ async def run_proxy(
     services: set[str],
     camera_type: str | None,
     printer_cert_path: Path,
+    advertise_ip: str | None = None,
+    data_port_start: int = FTP_DATA_PORT_START,
+    data_port_end: int = FTP_DATA_PORT_END,
 ) -> None:
     """Run the proxy servers based on enabled services."""
     chamber_proxy: ChamberImageProxy | None = None
@@ -149,6 +177,17 @@ async def run_proxy(
         # noinspection PyTypeChecker
         loop.add_signal_handler(sig, signal_handler)
 
+    # Under bridge networking the socket only ever sees the container's own
+    # private address, so PASV replies and the MQTT-reported printer address
+    # would both point somewhere no LAN client can reach.
+    if not advertise_ip and is_running_in_docker():
+        logger.warning(
+            "Running in Docker without --advertise-ip / ADVERTISE_IP. If this "
+            "container uses bridge networking with published ports, set it to "
+            "the Docker host's LAN address or passive FTP transfers and slicer "
+            "uploads will be sent to an unreachable address."
+        )
+
     try:
         # Generate shared TLS certificate
         certs_dir = Path("certs")
@@ -156,11 +195,28 @@ async def run_proxy(
         cert_path = certs_dir / CERT_FILENAME
         key_path = certs_dir / KEY_FILENAME
 
+        if (
+            cert_path.exists()
+            and key_path.exists()
+            and advertise_ip
+            and not certificate_covers(cert_path, advertise_ip)
+        ):
+            logger.info(
+                "Existing certificate does not cover %s, regenerating it",
+                advertise_ip,
+            )
+            cert_path.unlink(missing_ok=True)
+            key_path.unlink(missing_ok=True)
+
         if not cert_path.exists() or not key_path.exists():
             logger.info("Generating shared TLS certificate...")
             san_ips = ["127.0.0.1", "::1"]
             if bind != "0.0.0.0":  # noqa: S104  # intentional: skip adding default bind-all to SAN
                 san_ips.append(bind)
+            # This is the address clients are told to dial, so a client that
+            # validates the certificate against it needs it listed.
+            if advertise_ip and advertise_ip not in san_ips:
+                san_ips.append(advertise_ip)
 
             generate_self_signed_cert(
                 common_name="PandaProxy",
@@ -200,13 +256,21 @@ async def run_proxy(
                 key_path=key_path,
                 bind_address=bind,
                 printer_cert_path=printer_cert_path,
+                advertise_ip=advertise_ip,
             )
 
         # Instantiate FTP proxy if enabled
         if "ftp" in services:
             ftp_proxy = FTPProxy(
                 printer_ip=printer_ip,
+                access_code=access_code,
+                cert_path=cert_path,
+                key_path=key_path,
                 bind_address=bind,
+                printer_cert_path=printer_cert_path,
+                advertise_ip=advertise_ip,
+                data_port_start=data_port_start,
+                data_port_end=data_port_end,
             )
 
         # Start all services concurrently
@@ -254,7 +318,7 @@ async def run_proxy(
             typer.echo(f"  MQTT: mqtts://{bind}:8883 (TLS)")
 
         if "ftp" in services:
-            typer.echo(f"  FTP: ftps://{bind}:990 (implicit TLS, active mode only)")
+            typer.echo(f"  FTP: ftps://{bind}:990 (implicit TLS, passive mode)")
 
         typer.echo("=" * 60)
         if not is_running_in_docker():
@@ -352,6 +416,35 @@ def main(
             envvar="PRINTER_CERT",
         ),
     ] = Path(PRINTER_CERT_FILENAME),
+    data_port_start: Annotated[
+        int,
+        typer.Option(
+            "--data-port-start",
+            help="First passive FTP data port (must be published in Docker)",
+            envvar="FTP_DATA_PORT_START",
+        ),
+    ] = FTP_DATA_PORT_START,
+    data_port_end: Annotated[
+        int,
+        typer.Option(
+            "--data-port-end",
+            help="Last passive FTP data port",
+            envvar="FTP_DATA_PORT_END",
+        ),
+    ] = FTP_DATA_PORT_END,
+    advertise_ip: Annotated[
+        str | None,
+        typer.Option(
+            "--advertise-ip",
+            help=(
+                "Address to advertise to clients (FTP PASV replies and the "
+                "printer address in MQTT reports). Required behind Docker "
+                "bridge networking, where the container's own address is "
+                "unreachable from the LAN."
+            ),
+            envvar="ADVERTISE_IP",
+        ),
+    ] = None,
     verbose: Annotated[
         bool,
         typer.Option(
@@ -403,6 +496,49 @@ def main(
     except typer.BadParameter as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
+
+    # Before anything else: the value ends up inside FTP PASV replies and in
+    # the printer address of MQTT reports, both numeric, so a hostname cannot
+    # work and failing here beats failing on every report later.
+    if advertise_ip and not is_ipv4(advertise_ip):
+        typer.echo(
+            f"Error: --advertise-ip must be an IPv4 address, got {advertise_ip!r}.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    for name, value in (
+        ("--data-port-start", data_port_start),
+        ("--data-port-end", data_port_end),
+    ):
+        if not 1 <= value <= 65535:
+            typer.echo(
+                f"Error: {name} must be between 1 and 65535, got {value}.", err=True
+            )
+            raise typer.Exit(1)
+
+    if data_port_start > data_port_end:
+        typer.echo(
+            f"Error: --data-port-start ({data_port_start}) is above "
+            f"--data-port-end ({data_port_end}).",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    service_ports = {322: "RTSP", 990: "FTP control", 6000: "camera", 8883: "MQTT"}
+    clash = {
+        port: name
+        for port, name in service_ports.items()
+        if data_port_start <= port <= data_port_end
+    }
+    if clash:
+        listed = ", ".join(f"{port} ({name})" for port, name in sorted(clash.items()))
+        typer.echo(
+            f"Error: the data port range {data_port_start}-{data_port_end} "
+            f"covers a service port: {listed}.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     typer.echo(f"Connecting to printer at {printer_ip}...")
     typer.echo(f"Enabled services: {', '.join(sorted(enabled_services))}")
@@ -461,6 +597,9 @@ def main(
             services=enabled_services,
             camera_type=camera_type,
             printer_cert_path=cert,
+            advertise_ip=advertise_ip,
+            data_port_start=data_port_start,
+            data_port_end=data_port_end,
         )
     )
 

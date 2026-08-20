@@ -35,8 +35,14 @@ RUN --mount=type=cache,target=/root/.cache \
 
 # Install MediaMTX
 ARG MEDIAMTX_VERSION
-ARG ARCH=amd64
-RUN curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/mediamtx_v${MEDIAMTX_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/mediamtx.tar.gz && \
+ARG TARGETARCH
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) MTX_ARCH=amd64 ;; \
+      arm64) MTX_ARCH=arm64v8 ;; \
+      arm) MTX_ARCH=armv7 ;; \
+      *) echo "architecture non geree: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/mediamtx_v${MEDIAMTX_VERSION}_linux_${MTX_ARCH}.tar.gz" -o /tmp/mediamtx.tar.gz && \
     tar -xz -C /tmp -f /tmp/mediamtx.tar.gz
 
 
@@ -68,7 +74,7 @@ WORKDIR /app
 COPY --from=builder --chown=${UID} /app /app
 COPY --chown=${UID} printer.cer /app/printer.cer
 
-EXPOSE 322 990 6000 8883
+EXPOSE 322 990 2000-2019 6000 8883
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD pgrep -f pandaproxy || exit 1

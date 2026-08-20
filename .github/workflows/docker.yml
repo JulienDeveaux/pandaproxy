@@ -1,0 +1,117 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.14"
+  ALPINE_VERSION: "3.23"
+  MEDIAMTX_VERSION: "1.20.0"
+  IMAGE: ghcr.io/${{ github.repository_owner }}/pandaproxy
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest tests/ -q --timeout=120
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive version
+        id: version
+        run: |
+          if git describe --tags --exact-match >/dev/null 2>&1; then
+            value=$(git describe --tags --exact-match | sed 's/^v//')
+          else
+            tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+            base=$(printf '%s' "${tag#v}")
+            base=${base:-0.0.0}
+            if [ -n "$tag" ]; then
+              count=$(git rev-list --count "$tag"..HEAD)
+            else
+              count=$(git rev-list --count HEAD)
+            fi
+            value="${base}.dev${count}+g$(git rev-parse --short HEAD)"
+          fi
+          echo "Derived version: $value"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            ALPINE_VERSION=${{ env.ALPINE_VERSION }}
+            MEDIAMTX_VERSION=${{ env.MEDIAMTX_VERSION }}
+            VERSION=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the built image
+        if: github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Runs the entrypoint on the published amd64 image: catches an
+          # import-time break that unit tests on the host would not. The tag
+          # comes from metadata-action's own output rather than being
+          # reconstructed, which would drift if its format changed.
+          tag=$(printf '%s\n' "$TAGS" | head -n1)
+          echo "Smoke testing $tag"
+          docker run --rm --platform linux/amd64 "$tag" pandaproxy --version
