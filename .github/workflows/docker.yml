@@ -63,7 +63,6 @@ jobs:
           echo "Derived version: $value"
           echo "value=$value" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -91,7 +90,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # amd64 only: both target hosts are x86_64 (N100, TS-873A) and an
+          # arm64 leg costs 15-20 minutes of QEMU emulation per build. The
+          # Dockerfile's TARGETARCH mapping is kept so adding a platform back
+          # is a one-line change.
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
