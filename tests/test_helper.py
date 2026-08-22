@@ -1,6 +1,7 @@
 """Tests for helper utility functions."""
 
 import datetime
+import logging
 import ssl
 import struct
 import tempfile
@@ -10,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pandaproxy.helper import (
+    ReconnectPolicy,
     certificate_expires_soon,
     close_writer,
     create_auth_payload,
@@ -368,3 +370,84 @@ class TestCertificateExpirySignal:
         junk = tmp_path / "junk.crt"
         junk.write_text("not a certificate")
         assert certificate_expires_soon(junk) is True
+
+
+class TestReconnectPolicy:
+    """A printer switched off overnight must not fill the log or the network."""
+
+    @staticmethod
+    def _policy(caplog_logger="test.reconnect", **kw):
+        return ReconnectPolicy(logging.getLogger(caplog_logger), **kw)
+
+    def test_the_first_failure_is_visible(self, caplog):
+        policy = self._policy()
+        with caplog.at_level(logging.DEBUG):
+            policy.failure("printer unreachable")
+        records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(records) == 1
+
+    def test_the_repeats_are_not(self, caplog):
+        # This is the whole point: 200 identical failures, not 200 warnings.
+        policy = self._policy(report_every=25)
+        with caplog.at_level(logging.DEBUG):
+            for _ in range(24):
+                policy.failure("printer unreachable")
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+
+    def test_a_long_outage_is_still_reported_periodically(self, caplog):
+        # Silence for hours would be its own bug: nothing would say why the
+        # printer never came back.
+        policy = self._policy(report_every=10)
+        with caplog.at_level(logging.DEBUG):
+            for _ in range(30):
+                policy.failure("printer unreachable")
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 4  # the first, then attempts 10, 20 and 30
+        assert "Still failing after 30 attempts" in warnings[-1].getMessage()
+
+    def test_the_delay_grows_and_is_capped(self):
+        policy = self._policy(base_delay=5.0, max_delay=60.0)
+        delays = []
+        for _ in range(8):
+            policy.failure("nope")
+            delays.append(policy.delay())
+        assert delays[:4] == [5.0, 10.0, 20.0, 40.0]
+        assert set(delays[4:]) == {60.0}
+
+    def test_attempts_are_quiet_while_failing(self, caplog):
+        policy = self._policy()
+        with caplog.at_level(logging.DEBUG):
+            policy.log_attempt("connecting")
+            policy.failure("nope")
+            policy.log_attempt("connecting")
+        levels = [r.levelno for r in caplog.records if "connecting" in r.getMessage()]
+        assert levels == [logging.INFO, logging.DEBUG]
+
+    def test_recovery_resets_everything(self, caplog):
+        policy = self._policy(base_delay=5.0)
+        for _ in range(5):
+            policy.failure("nope")
+        with caplog.at_level(logging.INFO):
+            policy.success()
+        assert policy.failures == 0
+        assert policy.delay() == 5.0
+        assert "Recovered after 5 failed attempt(s)" in caplog.text
+
+    def test_a_success_with_nothing_to_recover_says_nothing(self, caplog):
+        policy = self._policy()
+        with caplog.at_level(logging.DEBUG):
+            policy.success()
+        assert caplog.records == []
+
+
+class TestReconnectPolicySurvivesLongOutages:
+    """The backoff must not be the thing that breaks during a long outage."""
+
+    def test_hundreds_of_failures_still_yield_a_delay(self):
+        # An overnight outage reaches this many attempts; computing 2**500
+        # raises OverflowError, which would kill the reconnect loop.
+        policy = ReconnectPolicy(logging.getLogger("test.longoutage"))
+        for _ in range(2000):
+            policy.failure("still off")
+        assert policy.delay() == policy.max_delay

@@ -28,7 +28,7 @@ import aiomqtt
 if TYPE_CHECKING:
     from pathlib import Path
 
-from pandaproxy.helper import close_writer, create_ssl_context
+from pandaproxy.helper import ReconnectPolicy, close_writer, create_ssl_context
 from pandaproxy.mqtt_protocol import (
     CONNACK_ACCEPTED,
     CONNACK_NOT_AUTHORIZED,
@@ -271,10 +271,11 @@ class MQTTProxy:
     async def _upstream_connection_loop(self) -> None:
         """Maintain a persistent MQTT connection to the printer, reconnecting on failure."""
         printer_ssl = create_ssl_context(self.printer_cert_path)
+        policy = ReconnectPolicy(logger, base_delay=RECONNECT_DELAY)
 
         while self._running:
             try:
-                logger.info(
+                policy.log_attempt(
                     "Connecting to printer MQTT at %s:%d", self.printer_ip, self.port
                 )
 
@@ -291,6 +292,7 @@ class MQTTProxy:
                     self._upstream_client = client
                     await client.subscribe(self.report_topic)
                     self._upstream_connected.set()
+                    policy.success()
                     logger.info(
                         "Connected to printer MQTT broker (subscribed to %s)",
                         self.report_topic,
@@ -331,12 +333,12 @@ class MQTTProxy:
                         await self._broadcast_report(topic, payload)
 
             except aiomqtt.MqttError as e:
-                logger.warning("Upstream MQTT connection error: %s", e)
+                policy.failure("Upstream MQTT connection error: %s", e)
             except asyncio.CancelledError:
                 logger.debug("Upstream connection loop cancelled")
                 return
             except Exception as e:
-                logger.error("Unexpected upstream error: %s", e)
+                policy.failure("Unexpected upstream error: %s", e)
             finally:
                 self._upstream_connected.clear()
                 self._upstream_client = None
@@ -347,8 +349,9 @@ class MQTTProxy:
                 self._clear_pushall_pending()
 
             if self._running:
-                logger.info("Reconnecting to printer in %d seconds...", RECONNECT_DELAY)
-                await asyncio.sleep(RECONNECT_DELAY)
+                delay = policy.delay()
+                logger.debug("Reconnecting to printer in %.0f seconds...", delay)
+                await asyncio.sleep(delay)
 
     async def _forward_to_upstream(self, topic: str, payload: bytes, qos: int) -> None:
         """Forward a client PUBLISH to the upstream printer connection."""
@@ -608,13 +611,13 @@ class MQTTProxy:
 
             # --- Wait for upstream to be ready ---
             if not self._upstream_connected.is_set():
-                logger.info("Waiting for upstream connection for %s...", peer)
+                logger.debug("Waiting for upstream connection for %s...", peer)
                 try:
                     await asyncio.wait_for(
                         self._upstream_connected.wait(), timeout=UPSTREAM_WAIT_TIMEOUT
                     )
                 except TimeoutError:
-                    logger.warning("Upstream not available for %s, disconnecting", peer)
+                    logger.debug("Upstream not available for %s, disconnecting", peer)
                     return
 
             # --- Register client queue ---
@@ -649,12 +652,18 @@ class MQTTProxy:
                 self._client_recv_loop(client_id, reader, writer, keepalive)
             )
 
-            _done, pending = await asyncio.wait(
+            done, pending = await asyncio.wait(
                 [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
             )
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+            # Retrieve the finished task's exception. Left unread, asyncio
+            # dumps it with a full traceback at shutdown - which is how a
+            # client simply going away ended up looking like a crash.
+            for task in done:
+                if not task.cancelled() and (exc := task.exception()) is not None:
+                    logger.debug("Client %s loop ended with %r", peer, exc)
 
         except ssl.SSLError as e:
             if "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(e):
@@ -769,3 +778,7 @@ class MQTTProxy:
             logger.debug("Client %s disconnected", client_id)
         except ssl.SSLError as e:
             logger.debug("Client %s SSL error during recv: %s", client_id, e)
+        except OSError as e:
+            # ConnectionResetError and friends: the client went away while we
+            # were writing to it. Routine, not worth a traceback.
+            logger.debug("Client %s connection lost during recv: %s", client_id, e)

@@ -79,10 +79,17 @@ class StreamFanout:
 
     def stop(self) -> None:
         """Stop fanout and disconnect all clients."""
+        was_running = self._running
         self._running = False
         for client in list(self._clients.values()):
             client.disconnect()
-        logger.info("[%s] Fanout stopped", self.name)
+        if was_running:
+            logger.info("[%s] Fanout stopped", self.name)
+        else:
+            # Called from the reconnect loop's cleanup, once per failed
+            # attempt. Announcing the stop of something that never started
+            # was a good third of the noise of an offline printer.
+            logger.debug("[%s] Fanout already stopped", self.name)
 
     async def register_client(self, client_id: str | None = None) -> StreamClient:
         """Register a new client and return its StreamClient instance."""

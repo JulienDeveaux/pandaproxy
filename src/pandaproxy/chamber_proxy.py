@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from pandaproxy.fanout import StreamFanout
 from pandaproxy.helper import (
+    ReconnectPolicy,
     close_writer,
     create_auth_payload,
     create_ssl_context,
@@ -134,10 +135,12 @@ class ChamberImageProxy:
 
     async def _upstream_connection_loop(self) -> None:
         """Maintain connection to printer chamber image stream, reconnecting on failure."""
+        policy = ReconnectPolicy(logger)
+
         while self._running:
             writer: asyncio.StreamWriter | None = None
             try:
-                logger.info(
+                policy.log_attempt(
                     "Connecting to printer chamber image at %s:%d",
                     self.printer_ip,
                     self.port,
@@ -155,6 +158,7 @@ class ChamberImageProxy:
                     logger.error("Failed to establish connection to printer")
                     await asyncio.sleep(5)
                     continue
+                policy.success()
                 logger.info("Connected to printer chamber image stream")
                 # Send authentication
                 auth_payload = create_auth_payload(self.access_code)
@@ -195,21 +199,22 @@ class ChamberImageProxy:
                     len(e.partial),
                 )
             except ConnectionRefusedError:
-                logger.error("Connection refused by printer")
+                policy.failure("Connection refused by printer")
             except ssl.SSLError as e:
-                logger.warning("Upstream SSL error: %s", e)
+                policy.failure("Upstream SSL error: %s", e)
             except OSError as e:
-                logger.warning("Upstream connection failed: %s", e)
+                policy.failure("Upstream connection failed: %s", e)
             except Exception as e:
-                logger.error("Unexpected upstream error: %s: %s", type(e).__name__, e)
+                policy.failure("Unexpected upstream error: %s: %s", type(e).__name__, e)
             finally:
                 self._upstream_connected.clear()
                 self._fanout.stop()
                 if writer:
                     await close_writer(writer)
             if self._running:
-                logger.info("Reconnecting to printer in 5 seconds...")
-                await asyncio.sleep(5)
+                delay = policy.delay()
+                logger.debug("Reconnecting to printer in %.0f seconds...", delay)
+                await asyncio.sleep(delay)
 
     async def _handle_client(
         self,
@@ -241,7 +246,7 @@ class ChamberImageProxy:
             logger.info("Client %s authenticated", client_addr)
             # Wait for upstream to be connected
             if not self._upstream_connected.is_set():
-                logger.info("Waiting for upstream connection...")
+                logger.debug("Waiting for upstream connection...")
                 try:
                     await asyncio.wait_for(
                         self._upstream_connected.wait(),

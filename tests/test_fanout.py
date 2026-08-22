@@ -1,6 +1,7 @@
 """Tests for StreamFanout broadcast functionality."""
 
 import asyncio
+import logging
 
 import pytest
 
@@ -218,3 +219,20 @@ class TestStreamFanout:
 
         # Behavior depends on implementation - just verify no crash
         assert count >= 0
+
+
+class TestStopIsQuietWhenIdle:
+    """The reconnect loop calls stop() on every failed attempt."""
+
+    def test_stopping_a_running_fanout_is_reported(self, caplog):
+        fanout = StreamFanout(name="chamber_image")
+        fanout.start()
+        with caplog.at_level(logging.INFO):
+            fanout.stop()
+        assert "Fanout stopped" in caplog.text
+
+    def test_stopping_an_idle_fanout_is_not(self, caplog):
+        fanout = StreamFanout(name="chamber_image")
+        with caplog.at_level(logging.INFO):
+            fanout.stop()
+        assert caplog.records == []

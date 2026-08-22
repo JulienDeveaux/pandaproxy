@@ -276,3 +276,70 @@ def certificate_expires_soon(
         days=margin_days
     )
     return cert.not_valid_after_utc <= deadline
+
+
+class ReconnectPolicy:
+    """Backoff and log damping for a reconnect loop.
+
+    A printer that is simply switched off for the night would otherwise
+    produce a connection attempt and two or three log lines every five
+    seconds until morning. The first failure deserves a warning; the two
+    hundredth does not, and neither does the traffic.
+    """
+
+    def __init__(
+        self,
+        logger_: logging.Logger,
+        *,
+        base_delay: float = 5.0,
+        max_delay: float = 60.0,
+        report_every: int = 25,
+    ) -> None:
+        self._logger = logger_
+        self.base_delay = base_delay
+        self.max_delay = max_delay
+        self.report_every = report_every
+        self._failures = 0
+
+    @property
+    def failures(self) -> int:
+        """Consecutive failures since the last success."""
+        return self._failures
+
+    def log_attempt(self, message: str, *args: object) -> None:
+        """Log an attempt: visible while things work, quiet once they don't."""
+        if self._failures == 0:
+            self._logger.info(message, *args)
+        else:
+            self._logger.debug(message, *args)
+
+    def failure(self, message: str, *args: object) -> None:
+        """Record a failed attempt, logging it only when it says something new."""
+        self._failures += 1
+        if self._failures == 1:
+            self._logger.warning(message, *args)
+        elif self._failures % self.report_every == 0:
+            # A periodic reminder, so a long outage is still visible in the
+            # log without every attempt being in it.
+            self._logger.warning(
+                "Still failing after %d attempts: " + message, self._failures, *args
+            )
+        else:
+            self._logger.debug(message, *args)
+
+    def success(self) -> None:
+        """Record a success, reporting recovery if there was anything to recover from."""
+        if self._failures:
+            self._logger.info("Recovered after %d failed attempt(s)", self._failures)
+        self._failures = 0
+
+    def delay(self) -> float:
+        """How long to wait before the next attempt."""
+        if self._failures <= 1:
+            return self.base_delay
+        # Clamp the shift, not just the result: an outage lasting hours reaches
+        # hundreds of failures, and 2**500 raises OverflowError rather than
+        # returning something large - which would crash the very loop whose
+        # job is to keep retrying.
+        shift = min(self._failures - 1, 32)
+        return min(self.base_delay * (2**shift), self.max_delay)
