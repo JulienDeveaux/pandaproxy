@@ -107,6 +107,15 @@ TRANSFER_COMPLETION_TIMEOUT = 3600.0
 MAX_CONTROL_LINE = 4096
 DATA_CHUNK = 65536
 
+# Kernel buffer cap on both legs of a data relay. A client measures upload
+# progress by what its socket accepts, so every byte parked inside the proxy
+# is progress it reports before the printer has it. With autotuned buffers
+# that was megabytes - tens of seconds at the printer's write speed, spent at
+# a seemingly finished upload while BambuStudio decides the transfer died.
+# Small enough to keep TCP backpressure end to end, far above what a LAN at
+# the printer's speed needs in flight.
+DATA_SOCKET_BUFFER = 65536
+
 # Commands whose effect must survive an upstream reconnect, and are therefore
 # recorded and replayed when a new printer session is opened.
 STATEFUL_COMMANDS = {"TYPE", "PBSZ", "PROT", "CWD", "CDUP"}
@@ -1172,6 +1181,21 @@ def _force_reset(writer: asyncio.StreamWriter) -> None:
             transport.abort()
 
 
+def _limit_buffering(writer: asyncio.StreamWriter) -> None:
+    """Keep a relayed socket from absorbing data the far end has not taken.
+
+    Without this the proxy acknowledges a transfer far ahead of the printer,
+    and the client's progress bar lies (see DATA_SOCKET_BUFFER).
+    """
+    with contextlib.suppress(OSError, AttributeError):
+        sock = writer.get_extra_info("socket")
+        if sock is not None:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, DATA_SOCKET_BUFFER)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, DATA_SOCKET_BUFFER)
+    with contextlib.suppress(AttributeError, RuntimeError):
+        writer.transport.set_write_buffer_limits(high=DATA_CHUNK)
+
+
 async def _pipe_both_ways(
     client_reader: asyncio.StreamReader,
     client_writer: asyncio.StreamWriter,
@@ -1183,6 +1207,8 @@ async def _pipe_both_ways(
     Returns how lopsided the traffic was, which tells the control side whether
     a payload went through and the printer may still be committing it.
     """
+    _limit_buffering(client_writer)
+    _limit_buffering(upstream_writer)
 
     # Shared across both directions: a download is silent upstream for its
     # whole duration, so only total silence counts as a stall.

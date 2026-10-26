@@ -569,6 +569,56 @@ class TestStallWatchdog:
             await right.wait_closed()
 
 
+class TestRelayBuffering:
+    """The relay must not let a client run ahead of the printer."""
+
+    async def test_relay_sockets_are_capped(self, monkeypatch):
+        # Regression: autotuned buffers let the proxy accept ~16MB ahead of a
+        # slow printer on Linux. BambuStudio pushed a whole 11.7MB file into
+        # the proxy, then watched its progress sit still for close to a minute
+        # while the proxy drained it, and gave up on the transfer.
+        import socket
+
+        import pandaproxy.ftp_proxy as module
+
+        # Peers stay connected but silent, and the watchdog ends the relay.
+        # The sizes are read mid-relay: macOS reports a different figure once
+        # the peer has gone, which says nothing about the live transfer.
+        monkeypatch.setattr(module, "DATA_STALL_TIMEOUT", 0.5)
+        monkeypatch.setattr(module, "DATA_STALL_CHECK", 0.1)
+
+        peers = []
+        left = await asyncio.start_server(lambda r, w: peers.append(w), "127.0.0.1", 0)
+        right = await asyncio.start_server(lambda r, w: peers.append(w), "127.0.0.1", 0)
+        try:
+            lr, lw = await asyncio.open_connection(
+                "127.0.0.1", left.sockets[0].getsockname()[1]
+            )
+            rr, rw = await asyncio.open_connection(
+                "127.0.0.1", right.sockets[0].getsockname()[1]
+            )
+            relay = asyncio.create_task(module._pipe_both_ways(lr, lw, rr, rw))
+            await asyncio.sleep(0.1)
+
+            for writer in (lw, rw):
+                sock = writer.get_extra_info("socket")
+                # Linux reports double what was asked, for its own bookkeeping.
+                for option in (socket.SO_RCVBUF, socket.SO_SNDBUF):
+                    size = sock.getsockopt(socket.SOL_SOCKET, option)
+                    assert size <= 2 * module.DATA_SOCKET_BUFFER
+                assert (
+                    writer.transport.get_write_buffer_limits()[1] <= module.DATA_CHUNK
+                )
+            await asyncio.wait_for(relay, timeout=10)
+            for writer in (lw, rw, *peers):
+                writer.close()
+        finally:
+            left.close()
+            right.close()
+            await left.wait_closed()
+            await right.wait_closed()
+
+
 class TestDataPortPeerCheck:
     """Only the host holding the control session may use the data port."""
 
